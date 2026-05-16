@@ -70,6 +70,7 @@ model CommandeFournisseur {
   dateArriveeEstimee DateTime?
   createdAt    DateTime       @default(now())
   articles     Article[]
+  parcels      ParcelTracking[]
 }
 
 model Article {
@@ -104,6 +105,8 @@ model Vente {
   botAccountId          String?
   botAccount            BotAccount?      @relation(fields: [botAccountId], references: [id])
   expedition            Expedition?
+  parcelId              String?
+  parcel                ParcelTracking?  @relation(fields: [parcelId], references: [id])
 }
 
 model Expedition {
@@ -228,5 +231,58 @@ model BotActionQueue {
   createdAt         DateTime    @default(now())
   completedAt       DateTime?
   errorMessage      String?     @db.Text
+}
+
+// ── Tracker Colis ────────────────────────────────────────────────────────────
+
+enum ParcelStatus {
+  EN_ATTENTE
+  PRIS_EN_CHARGE
+  EN_TRANSIT
+  EN_LIVRAISON
+  LIVRE
+  RETOUR
+  INCIDENT
+  INCONNU
+}
+
+model ParcelTracking {
+  id                   String       @id @default(uuid())
+
+  commandeId           String?
+  commande             CommandeFournisseur? @relation(fields: [commandeId], references: [id])
+
+  ventes               Vente[]
+
+  trackingNumber       String
+  carrier              String?
+  carrierCode          String?
+
+  status               ParcelStatus @default(EN_ATTENTE)
+  statusRaw            String?
+  lastUpdate           DateTime?
+  estimatedDelivery    DateTime?
+  lastEventDescription String?
+  daysSinceOrder       Int?
+  daysInTransit        Int?
+
+  events               ParcelEvent[]
+
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+}
+
+model ParcelEvent {
+  id          String         @id @default(uuid())
+  parcelId    String
+  parcel      ParcelTracking @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+
+  date        DateTime
+  location    String?
+  description String
+  status      ParcelStatus   @default(INCONNU)
+  stage       String?
+
+  createdAt   DateTime       @default(now())
 }
 

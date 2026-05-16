@@ -21,7 +21,9 @@ export async function POST(request: Request) {
       lienProduit,
       notes,
       dateArriveeEstimee,
-      panier // Tableau dynamique: Array<{ nom: string, lien?: string, url?: string, quantite: number, notes?: string }>
+      panier, // Tableau dynamique: Array<{ nom: string, lien?: string, url?: string, quantite: number, notes?: string }>
+      trackingNumber,
+      carrier
     } = body
 
     // Détermination du nombre final d'articles par somme du panier ou paramètre direct
@@ -100,7 +102,19 @@ export async function POST(request: Request) {
       return commande
     })
 
-    return NextResponse.json({ success: true, data: newCommande }, { status: 201 })
+    let parcelCreated = false
+    if (trackingNumber) {
+      await prisma.parcelTracking.create({
+        data: {
+          trackingNumber,
+          carrier: carrier || null,
+          commandeId: newCommande.id,
+        }
+      })
+      parcelCreated = true
+    }
+
+    return NextResponse.json({ success: true, data: newCommande, parcelCreated }, { status: 201 })
 
   } catch (error: any) {
     console.error('Error creating command:', error)

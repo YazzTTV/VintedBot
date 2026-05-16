@@ -57,7 +57,9 @@ export default function CommandesPage() {
     prixTotal: '',
     fraisPort: '0',
     notes: '',
-    dateArriveeEstimee: ''
+    dateArriveeEstimee: '',
+    trackingNumber: '',
+    carrier: ''
   })
 
   // NOUVEAU : Panier de commande multi-produits
@@ -157,7 +159,9 @@ export default function CommandesPage() {
       const payload = {
         ...formData,
         nbArticles: totalArticles,
-        panier: panier
+        panier: panier,
+        trackingNumber: formData.trackingNumber || undefined,
+        carrier: formData.carrier || undefined
       }
 
       const res = await fetch('/api/commandes', {
@@ -177,7 +181,9 @@ export default function CommandesPage() {
           numero: '',
           prixTotal: '',
           notes: '',
-          dateArriveeEstimee: ''
+          dateArriveeEstimee: '',
+          trackingNumber: '',
+          carrier: ''
         }))
 
         // Réinitialiser le panier avec 1 ligne vide
@@ -617,7 +623,7 @@ export default function CommandesPage() {
               <div className="md:col-span-2 space-y-2 mt-2">
                 <label className="text-sm font-medium text-zinc-300">Notes Interne</label>
                 <div className="relative">
-                  <textarea 
+                  <textarea
                     rows={3}
                     name="notes"
                     value={formData.notes}
@@ -627,6 +633,38 @@ export default function CommandesPage() {
                   />
                   <FileText className="w-5 h-5 text-zinc-500 absolute left-4 top-4" />
                 </div>
+              </div>
+
+              {/* Numéro de suivi (optionnel) */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-zinc-300">Numéro de suivi (optionnel)</label>
+                <input
+                  type="text"
+                  name="trackingNumber"
+                  value={formData.trackingNumber}
+                  onChange={handleChange}
+                  placeholder="ex: LY123456789CN"
+                  className="w-full bg-zinc-900/50 border border-zinc-800 text-white rounded-xl px-4 py-3 text-sm placeholder:text-zinc-600 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50 outline-none transition-all"
+                />
+              </div>
+
+              {/* Transporteur (optionnel) */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-zinc-300">Transporteur (optionnel)</label>
+                <select
+                  name="carrier"
+                  value={formData.carrier}
+                  onChange={handleChange}
+                  className="w-full bg-zinc-900/50 border border-zinc-800 text-white rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500/50 outline-none transition-all cursor-pointer appearance-none"
+                >
+                  <option value="">Auto-détection</option>
+                  <option value="colissimo">Colissimo</option>
+                  <option value="chinapost">China Post</option>
+                  <option value="4px">4PX</option>
+                  <option value="yanwen">Yanwen</option>
+                  <option value="cainiao">Cainiao</option>
+                  <option value="yunexpress">Yun Express</option>
+                </select>
               </div>
             </div>
 

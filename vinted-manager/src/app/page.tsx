@@ -2,11 +2,11 @@
 
 import React from "react"
 import Link from "next/link"
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  PackageOpen, 
-  Euro, 
+import {
+  TrendingUp,
+  TrendingDown,
+  PackageOpen,
+  Euro,
   ShoppingBag,
   ArrowUpRight,
   MoreHorizontal,
@@ -16,16 +16,17 @@ import {
   Server,
   Clock
 } from "lucide-react"
-import { 
-  ResponsiveContainer, 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
   Tooltip,
   CartesianGrid
 } from "recharts"
 import { cn } from "@/lib/utils"
+import ParcelAlertBanner from "@/components/ParcelAlertBanner"
 
 export default function Dashboard() {
   const [stats, setStats] = React.useState<any>(null)
@@ -54,6 +55,9 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-8 p-8 lg:p-10 max-w-7xl mx-auto w-full">
+      {/* Parcel Alert Banner */}
+      <ParcelAlertBanner />
+
       {/* Header */}
       <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>

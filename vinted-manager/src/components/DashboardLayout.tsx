@@ -26,6 +26,7 @@ const navigation = [
   { name: 'Commandes', href: '/commandes', icon: ShoppingBag },
   { name: 'Stock', href: '/stock', icon: Package },
   { name: 'Ventes', href: '/ventes', icon: Tag },
+  { name: 'Colis', href: '/parcels', icon: Package },
   { name: 'Expéditions', href: '/expeditions', icon: Truck },
   { name: 'Sourcing', href: '/sourcing', icon: Search },
   { name: 'Archives', href: '/archives', icon: Archive },
