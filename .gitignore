@@ -1,0 +1,56 @@
+# --- Secrets & config locale ---
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+credentials.json
+**/secrets/
+
+# --- Données opérationnelles (comptes, listings, archives) ---
+/Accounts/
+/Input_Screenshots/
+/Output_Listings/
+/Products_Archive/
+*.xlsx
+*.xls
+
+# --- Profil navigateur Edge (cookies, sessions, email) ---
+/vinted_bot/Bot_Profile/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+
+# --- Node / Next.js (vinted-manager) ---
+node_modules/
+.next/
+out/
+build/
+.vercel/
+*.tsbuildinfo
+next-env.d.ts
+/vinted-manager/src/generated/
+
+# --- Debug & artefacts locaux ---
+/vinted_bot/debug_*.png
+/vinted_bot/risk_page_content.html
+/vinted_bot/raw_response.txt
+
+# --- OS & IDE ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+*.log
+
+# --- Prisma local ---
+/prisma/*.db
+/prisma/*.db-journal

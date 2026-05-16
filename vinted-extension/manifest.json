@@ -1,0 +1,59 @@
+{
+  "manifest_version": 3,
+  "name": "Vinted Pro Bot",
+  "version": "1.0",
+  "description": "Un bot intelligent pour automatiser les tâches sur Vinted.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "webRequest",
+    "alarms",
+    "cookies"
+  ],
+  "host_permissions": [
+    "*://*.vinted.fr/*",
+    "*://*.vinted.com/*",
+    "*://*.vinted.net/*",
+    "*://*.vinted.nl/*",
+    "*://*.vinted.be/*",
+    "*://*.vinted.de/*",
+    "*://*.vinted.es/*",
+    "*://*.vinted.it/*",
+    "*://*.vinted.pl/*",
+    "*://*.vinted.pt/*",
+    "*://*.vinted.lt/*",
+    "*://*.vinted.cz/*",
+    "*://*.vinted.co.uk/*",
+    "*://*.temu.com/*",
+    "*://*.kwcdn.com/*",
+    "https://vinted-manager-flame.vercel.app/*",
+    "http://localhost:3000/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.vinted.fr/*",
+        "*://*.vinted.com/*",
+        "*://*.vinted.nl/*",
+        "*://*.vinted.be/*",
+        "*://*.vinted.de/*",
+        "*://*.vinted.es/*",
+        "*://*.vinted.it/*",
+        "*://*.vinted.pl/*",
+        "*://*.vinted.pt/*",
+        "*://*.vinted.lt/*",
+        "*://*.vinted.cz/*",
+        "*://*.vinted.co.uk/*"
+      ],
+      "js": ["content/content.js", "content/messages.js"]
+    }
+  ],
+  "action": {
+    "default_title": "Ouvrir le Vinted Bot"
+  }
+}

@@ -1,0 +1,5 @@
+# Dépendances pour le bot Vinted/Shein
+playwright
+google-genai
+python-dotenv
+requests

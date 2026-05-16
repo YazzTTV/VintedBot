@@ -1,0 +1,463 @@
+/**
+ * ⚡ Vinted REST API Utility Engine
+ * 🤖 Module développé pour propulser vinted-extension de manière furtive et ultra-rapide.
+ * Basé sur la rétro-ingénierie du moteur REST natif (zéro DOM / zéro Selenium).
+ */
+
+// Base URL dynamique — détectée depuis l'onglet Vinted actif
+let _cachedBaseUrl = null;
+
+async function getVintedBaseUrl() {
+    if (_cachedBaseUrl) return _cachedBaseUrl;
+    return new Promise((resolve) => {
+        chrome.tabs.query({ url: ["*://*.vinted.fr/*", "*://*.vinted.com/*", "*://*.vinted.nl/*", "*://*.vinted.be/*", "*://*.vinted.de/*", "*://*.vinted.es/*", "*://*.vinted.it/*", "*://*.vinted.pl/*", "*://*.vinted.pt/*", "*://*.vinted.lt/*"] }, (tabs) => {
+            if (tabs && tabs.length > 0) {
+                const url = new URL(tabs[0].url);
+                _cachedBaseUrl = url.origin; // ex: "https://www.vinted.nl"
+            } else {
+                _cachedBaseUrl = "https://www.vinted.fr"; // Fallback FR
+            }
+            resolve(_cachedBaseUrl);
+        });
+    });
+}
+
+// Invalider le cache toutes les 10 min (en cas de changement de profil)
+setInterval(() => { _cachedBaseUrl = null; }, 10 * 60 * 1000);
+
+/**
+ * Génère un UUID v4 aléatoire.
+ */
+function generateUUID() {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        return crypto.randomUUID();
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+/**
+ * Récupère le jeton CSRF avec cache de 5 minutes pour éviter les allers-retours excessifs.
+ */
+let _csrfCache = { token: null, expiry: 0 };
+const CSRF_TTL_MS = 5 * 60 * 1000;
+
+async function getCsrfToken() {
+    // Retourner le cache si encore valide
+    if (_csrfCache.token && Date.now() < _csrfCache.expiry) {
+        return _csrfCache.token;
+    }
+
+    return new Promise((resolve) => {
+        chrome.tabs.query({ url: ["*://*.vinted.fr/*", "*://*.vinted.com/*", "*://*.vinted.nl/*", "*://*.vinted.be/*", "*://*.vinted.de/*", "*://*.vinted.es/*", "*://*.vinted.it/*"] }, (tabs) => {
+            if (!tabs || tabs.length === 0) {
+                console.warn("⚠️ Aucun onglet Vinted ouvert pour extraire le Token CSRF.");
+                resolve(null);
+                return;
+            }
+            chrome.tabs.sendMessage(tabs[0].id, { action: "getCsrfToken" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    resolve(null);
+                    return;
+                }
+                const token = response ? response.token : null;
+                if (token) {
+                    _csrfCache = { token, expiry: Date.now() + CSRF_TTL_MS };
+                }
+                resolve(token);
+            });
+        });
+    });
+}
+
+/**
+ * Récupère la valeur d'un cookie spécifique via l'API chrome.cookies.
+ */
+async function getCookie(name, url = VINTED_BASE_URL) {
+    return new Promise((resolve) => {
+        chrome.cookies.get({ url: url, name: name }, (cookie) => {
+            resolve(cookie ? cookie.value : null);
+        });
+    });
+}
+
+/**
+ * Exécute une requête HTTP Fetch vers Vinted avec injection automatique de l'authentification REST.
+ */
+async function vintedFetch(endpoint, options = {}) {
+    const baseUrl = await getVintedBaseUrl();
+    const url = endpoint.startsWith("http") ? endpoint : `${baseUrl}${endpoint}`;
+    
+    // Récupérer en parallèle les identifiants nécessaires
+    const csrfToken = await getCsrfToken();
+    const anonId = await getCookie("anon_id", url);
+
+    // Configurer les en-têtes standard imitant parfaitement Vinted Web
+    const headers = Object.assign({
+        "Accept": "application/json, text/plain, */*",
+        "X-Money-Object": "true"
+    }, options.headers || {});
+
+    if (csrfToken) {
+        headers["X-CSRF-Token"] = csrfToken;
+    }
+    if (anonId) {
+        headers["X-Anon-Id"] = anonId;
+    }
+
+    // Ne pas forcer le Content-Type si on utilise du FormData (le navigateur doit ajouter le boundary lui-même)
+    if (!(options.body instanceof FormData) && !headers["Content-Type"]) {
+        headers["Content-Type"] = "application/json";
+    }
+
+    const fetchOptions = {
+        method: options.method || "GET",
+        headers: headers,
+        credentials: "include" // CRITIQUE : Envoie les cookies réels du compte Vinted !
+    };
+
+    if (options.body) {
+        fetchOptions.body = options.body;
+    }
+
+    try {
+        const response = await fetch(url, fetchOptions);
+        
+        // Si Vinted répond en JSON, parser directement
+        const contentType = response.headers.get("content-type") || "";
+        let responseData;
+        
+        if (contentType.includes("application/json")) {
+            responseData = await response.json();
+        } else {
+            responseData = await response.text();
+        }
+
+        return {
+            success: response.ok,
+            status: response.status,
+            data: responseData
+        };
+
+    } catch (error) {
+        console.error(`❌ Erreur réseau vintedFetch sur ${url} :`, error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+}
+
+/**
+ * Récupère le solde du Wallet (Comptabilité réelle) de l'utilisateur actuellement connecté.
+ */
+async function fetchWalletBalance() {
+    console.log("💰 Lecture du solde en temps réel par API...");
+    const res = await vintedFetch("/api/v2/wallet/history");
+    if (!res.success) {
+        throw new Error(`Échec de la lecture du portefeuille : statut ${res.status}`);
+    }
+
+    const data = res.data;
+    let pending = 0;
+    let available = 0;
+
+    if (data.wallet) {
+        pending = parseFloat(data.wallet.pending_amount || 0);
+        available = parseFloat(data.wallet.available_amount || 0);
+    } else if (data.balance) {
+        pending = parseFloat(data.balance.pending || 0);
+        available = parseFloat(data.balance.available || 0);
+    } else {
+        pending = parseFloat(data.pending_amount || 0);
+        available = parseFloat(data.available_amount || 0);
+    }
+
+    return {
+        pending,
+        available
+    };
+}
+
+/**
+ * Télécharge une photo brute vers les serveurs d'hébergement de Vinted.
+ * @param {Blob} photoBlob Le blob de l'image à héberger.
+ * @param {string} filename Le nom du fichier à assigner.
+ * @returns {number} L'identifiant unique de la photo hébergée chez Vinted.
+ */
+async function uploadPhotoToVinted(photoBlob, filename = "photo.jpg") {
+    console.log("📸 Uploading photo vers les serveurs Vinted...");
+    
+    const formData = new FormData();
+    formData.append("photo[type]", "item");
+    formData.append("photo[file]", photoBlob, filename);
+    formData.append("photo[temp_uuid]", generateUUID());
+
+    const res = await vintedFetch("/api/v2/photos", {
+        method: "POST",
+        body: formData
+    });
+
+    if (!res.success) {
+        throw new Error("Échec de l'upload de la photo chez Vinted");
+    }
+
+    const photoId = res.data.photo ? res.data.photo.id : res.data.id;
+    if (!photoId) {
+        throw new Error("La photo a été uploadée mais Vinted n'a pas retourné d'identifiant ID");
+    }
+
+    console.log(`✅ Photo validée chez Vinted, ID assigné : ${photoId}`);
+    return photoId;
+}
+
+/**
+ * Crée un brouillon d'annonce (Draft) et le publie définitivement en 2 requêtes JSON.
+ * @param {Object} draftPayload La structure complète de l'article.
+ */
+async function publishItemREST(draftPayload) {
+    console.log("📝 Création du brouillon d'annonce REST...");
+    
+    const draftUuid = generateUUID();
+    
+    // Structure attendue par le validateur interne de Vinted
+    const draftWrapper = {
+        draft: Object.assign({
+            id: null,
+            currency: "EUR",
+            temp_uuid: draftUuid,
+            is_unisex: false,
+            shipment_prices: { domestic: null, international: null },
+            measurement_length: null,
+            measurement_width: null,
+            manufacturer: null,
+            model: null
+        }, draftPayload),
+        feedback_id: null,
+        parcel: null,
+        upload_session_id: draftUuid
+    };
+
+    // ÉTAPE 1 : Envoi du brouillon
+    const draftRes = await vintedFetch("/api/v2/item_upload/drafts", {
+        method: "POST",
+        body: JSON.stringify(draftWrapper)
+    });
+
+    if (!draftRes.success) {
+        console.error("❌ Échec création brouillon Vinted :", draftRes.data);
+        throw new Error(`Erreur création Draft (HTTP ${draftRes.status})`);
+    }
+
+    const createdDraft = draftRes.data.draft || draftRes.data;
+    const draftId = createdDraft.id;
+    if (!draftId) {
+        throw new Error("Draft créé mais ID non retourné par le serveur");
+    }
+
+    console.log(`✅ Brouillon #${draftId} créé. En attente de publication finale...`);
+    
+    // Petite pause naturelle
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    // ÉTAPE 2 : Validation et Mise en ligne immédiate
+    const completionWrapper = {
+        draft: createdDraft,
+        feedback_id: null,
+        parcel: null,
+        push_up: false,
+        upload_session_id: createdDraft.temp_uuid || draftUuid
+    };
+
+    const pubRes = await vintedFetch(`/api/v2/item_upload/drafts/${draftId}/completion`, {
+        method: "POST",
+        body: JSON.stringify(completionWrapper)
+    });
+
+    if (!pubRes.success) {
+        console.error("❌ Échec mise en ligne définitive :", pubRes.data);
+        throw new Error(`Erreur finalisation publication (HTTP ${pubRes.status})`);
+    }
+
+    const finalItem = pubRes.data.item || pubRes.data;
+    const finalId = finalItem.id || draftId;
+    
+    const baseUrl = await getVintedBaseUrl();
+    console.log(`🚀 L'ARTICLE EST OFFICIELLEMENT EN LIGNE SUR VINTED ! ID : ${finalId}`);
+    return {
+        itemId: finalId,
+        url: `${baseUrl}/items/${finalId}`
+    };
+}
+
+/**
+ * 🎨 Hash Modification en Service Worker (Furtivité Absolue)
+ * Utilise OffscreenCanvas pour tronquer de 1px et re-compresser l'image,
+ * changeant instantanément le MD5/Hash perceptuel pour bypasser les filtres anti-spam Vinted.
+ */
+async function processImageOffscreen(imageBlob) {
+    try {
+        // createImageBitmap est supporté nativement dans les Service Workers MV3 !
+        const bitmap = await createImageBitmap(imageBlob);
+        
+        // Créer un canevas virtuel 1px plus petit
+        const targetWidth = Math.max(1, bitmap.width - 1);
+        const targetHeight = Math.max(1, bitmap.height - 1);
+        
+        const canvas = new OffscreenCanvas(targetWidth, targetHeight);
+        const ctx = canvas.getContext('2d');
+        
+        // Dessiner avec rognage infime pour forcer un ré-échantillonnage des pixels
+        ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight, 0, 0, targetWidth, targetHeight);
+        
+        // Convertir en Blob JPEG avec légère variation de qualité
+        const processedBlob = await canvas.convertToBlob({
+            type: 'image/jpeg',
+            quality: 0.92
+        });
+        
+        // Libérer la mémoire
+        bitmap.close();
+        
+        return processedBlob;
+    } catch (error) {
+        console.warn("⚠️ Échec processImageOffscreen, utilisation du blob original :", error);
+        return imageBlob;
+    }
+}
+
+/**
+ * 🗑️ Supprime un article définitivement via REST API
+ */
+async function deleteItemREST(itemId) {
+    console.log(`🗑️ Suppression de l'article #${itemId}...`);
+    
+    // Tentative 1 : POST direct de suppression (Standard Vinted Web)
+    const resPost = await vintedFetch(`/api/v2/items/${itemId}/delete`, {
+        method: "POST",
+        body: JSON.stringify({})
+    });
+
+    if (resPost.success) {
+        console.log(`✅ Article #${itemId} supprimé avec succès via POST`);
+        return true;
+    }
+
+    // Tentative 2 : DELETE natif (Alternative)
+    const resDelete = await vintedFetch(`/api/v2/items/${itemId}`, {
+        method: "DELETE"
+    });
+
+    if (resDelete.success) {
+        console.log(`✅ Article #${itemId} supprimé avec succès via DELETE`);
+        return true;
+    }
+
+    console.error(`❌ Impossible de supprimer l'article #${itemId}`);
+    return false;
+}
+
+/**
+ * 🔄 REPOSTE FURTIF : Clone un article existant avec de nouvelles photos uniques puis détruit l'ancien.
+ * @param {string|number} itemId L'identifiant de l'article à cloner.
+ * @param {Object} options Options optionnelles (ex: deleteAfter: true).
+ */
+async function repostItemREST(itemId, options = {}) {
+    console.log(`🔄 Démarrage du clonage furtif de l'article #${itemId}...`);
+    const deleteAfter = options.deleteAfter !== undefined ? options.deleteAfter : true;
+
+    // ÉTAPE 1 : Récupérer les détails internes de l'annonce existante
+    let itemRes = await vintedFetch(`/api/v2/item_upload/items/${itemId}`);
+    if (!itemRes.success) {
+        console.warn("Fallback sur endpoint /items/ public car /item_upload/items a échoué.");
+        itemRes = await vintedFetch(`/api/v2/items/${itemId}`);
+    }
+
+    if (!itemRes.success) {
+        throw new Error(`Impossible de récupérer les données de l'article ${itemId} (HTTP ${itemRes.status})`);
+    }
+
+    const original = itemRes.data.item || itemRes.data;
+    if (!original) {
+        throw new Error("Format de réponse Vinted inconnu lors de la lecture de l'article.");
+    }
+
+    console.log(`📖 Analyse de l'annonce : "${original.title}" (${original.price_numeric || original.price}€)`);
+
+    // ÉTAPE 2 : Extraire, modifier et re-héberger chaque photo
+    const originalPhotos = original.photos || [];
+    const newPhotoIds = [];
+
+    if (originalPhotos.length === 0) {
+        throw new Error("L'annonce originale ne contient aucune photo. Reposte impossible.");
+    }
+
+    for (let i = 0; i < originalPhotos.length; i++) {
+        const photoObj = originalPhotos[i];
+        const photoUrl = photoObj.full_size_url || photoObj.url;
+        
+        if (!photoUrl) continue;
+
+        try {
+            console.log(`📸 Téléchargement de la photo ${i + 1}/${originalPhotos.length}...`);
+            const fetchPhoto = await fetch(photoUrl);
+            const photoBlob = await fetchPhoto.blob();
+
+            // Application de notre filtre anti-détection unique
+            console.log(`🎨 Modification furtive des pixels (image ${i + 1})...`);
+            const scrambledBlob = await processImageOffscreen(photoBlob);
+
+            // Upload chez Vinted sous une nouvelle identité
+            const newId = await uploadPhotoToVinted(scrambledBlob, `repost_${i}.jpg`);
+            newPhotoIds.push({ id: newId, orientation: 0 });
+
+            // Temporisation naturelle pour ne pas spammer l'infra photos
+            await new Promise(r => setTimeout(r, 1200));
+        } catch (err) {
+            console.error(`⚠️ Échec du clonage de la photo #${i} :`, err);
+        }
+    }
+
+    if (newPhotoIds.length === 0) {
+        throw new Error("Échec critique : Aucune photo n'a pu être régénérée pour le reposte.");
+    }
+
+    // ÉTAPE 3 : Assemblage de la charge utile du clone
+    // Convertit le schéma de sortie Vinted en schéma d'entrée valide pour l'upload
+    const draftPayload = {
+        title: original.title,
+        description: original.description || "",
+        catalog_id: original.catalog_id,
+        brand_id: original.brand_id,
+        size_id: original.size_id,
+        status_id: original.status_id,
+        package_size_id: original.package_size_id,
+        color_ids: original.color_ids || [original.color1_id, original.color2_id].filter(Boolean),
+        price: parseFloat(original.price_numeric || original.price || 0),
+        currency: original.currency || "EUR",
+        assigned_photos: newPhotoIds
+    };
+
+    // ÉTAPE 4 : Supprimer l'ancien AVANT de publier (évite la détection de doublons)
+    if (deleteAfter) {
+        console.log("🧹 Suppression préventive de l'ancienne annonce...");
+        await deleteItemREST(itemId);
+        // Pause pour laisser Vinted propager la suppression
+        await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // ÉTAPE 5 : Publication instantanée du Clone
+    console.log("🚀 Envoi du clone sur Vinted...");
+    const publishResult = await publishItemREST(draftPayload);
+
+    console.log(`🎉 Reposte terminé avec succès ! Nouveau lien : ${publishResult.url}`);
+    return {
+        success: true,
+        oldId: itemId,
+        newId: publishResult.itemId,
+        url: publishResult.url
+    };
+}
+

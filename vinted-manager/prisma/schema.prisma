@@ -1,0 +1,232 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Fournisseur {
+  TEMU
+  SHEIN
+  AUTRE
+}
+
+enum StatutCommande {
+  COMMANDEE
+  EN_TRANSIT
+  RECUE
+}
+
+enum StatutArticle {
+  EN_TRANSIT
+  STOCK
+  VENDU
+  EXPEDIE
+  RELANCE
+}
+
+enum StatutVente {
+  EN_ATTENTE
+  A_EXPEDIER
+  EXPEDIEE
+  ANNULEE
+}
+
+enum ExtensionStatut {
+  AUCUNE
+  DEMANDEE
+  ACCEPTEE
+}
+
+model User {
+  id         String               @id @default(uuid())
+  email      String               @unique
+  password   String
+  name       String?
+  createdAt  DateTime             @default(now())
+  commandes  CommandeFournisseur[]
+}
+
+model CommandeFournisseur {
+  id           String         @id @default(uuid())
+  userId       String
+  user         User           @relation(fields: [userId], references: [id])
+  numero       String
+  fournisseur  Fournisseur
+  dateCommande DateTime
+  prixTotal    Decimal        @db.Decimal(10, 2)
+  fraisPort    Decimal        @db.Decimal(10, 2)
+  nbArticles   Int            @default(1)
+  lienProduit  String?
+  statut       StatutCommande @default(COMMANDEE)
+  notes        String?
+  dateArriveeEstimee DateTime?
+  createdAt    DateTime       @default(now())
+  articles     Article[]
+}
+
+model Article {
+  id                  String              @id @default(uuid())
+  commandeId          String
+  commande            CommandeFournisseur @relation(fields: [commandeId], references: [id])
+  prixAchatUnitaire   Decimal             @db.Decimal(10, 2)
+  fraisPortUnitaires  Decimal             @db.Decimal(10, 2)
+  lienProduit         String?
+  statut              StatutArticle       @default(STOCK)
+  dateAjoutStock      DateTime            @default(now())
+  nom                 String?
+  notes               String?
+  vente               Vente?
+  vintedOrderSynced   VintedOrderSynced?
+}
+
+model Vente {
+  id                    String      @id @default(uuid())
+  articleId             String      @unique
+  article               Article     @relation(fields: [articleId], references: [id])
+  pseudoAcheteur        String
+  prixVente             Decimal     @db.Decimal(10, 2)
+  fraisVinted           Decimal     @db.Decimal(10, 2) @default(0.70)
+  beneficeNet           Decimal     @db.Decimal(10, 2)
+  margePct              Decimal     @db.Decimal(5, 2)
+  dateVente             DateTime    @default(now())
+  dateLimiteExpedition  DateTime?
+  lienVente             String?
+  statut                StatutVente      @default(EN_ATTENTE)
+  extensionStatut       ExtensionStatut  @default(AUCUNE)
+  botAccountId          String?
+  botAccount            BotAccount?      @relation(fields: [botAccountId], references: [id])
+  expedition            Expedition?
+}
+
+model Expedition {
+  id               String   @id @default(uuid())
+  venteId          String   @unique
+  vente            Vente    @relation(fields: [venteId], references: [id])
+  numeroBordereau  String?
+  bordereauUrl     String?
+  dateExpedition   DateTime @default(now())
+  transporteur     String?
+  notes            String?
+}
+
+model SourcingProduct {
+  id          String   @id @default(uuid())
+  account     String
+  title       String
+  url         String
+  fiche       String
+  imageUrl    String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([account, url])
+}
+
+model BotAccount {
+  id                String   @id @default(uuid())
+  name              String   @unique // Identifiant local ("lena", "margaux", "nina", "orane", "emma")
+  vintedUsername    String?  // Nom réel affiché sur Vinted
+  vintedAccountId   String?  @unique // ID Vinted numérique natif (ex: "1283928")
+  balancePending    Decimal? @db.Decimal(10, 2) @default(0)
+  balanceAvailable  Decimal? @db.Decimal(10, 2) @default(0)
+  lastSync          DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  orders            VintedOrderSynced[]
+  conversations     VintedConversation[]
+  metrics           VintedItemMetrics[]
+  actions           BotActionQueue[]
+  ventes            Vente[]
+}
+
+model VintedOrderSynced {
+  id               String      @id // transaction_id natif Vinted
+  botAccountId     String
+  botAccount       BotAccount  @relation(fields: [botAccountId], references: [id])
+  
+  title            String
+  price            Decimal     @db.Decimal(10, 2)
+  itemId           String?     // ID de l'annonce
+  buyerLogin       String?
+  buyerPhoto       String?     @db.Text
+  photoUrl         String?     @db.Text
+  
+  status           String      // completed, cancelled, in_escrow, etc.
+  shippingStatus   String?     // Statut colis
+  trackingCode     String?     // Numéro de suivi
+  
+  createdAtVinted  DateTime
+  syncedAt         DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  
+  // Liaison optionnelle avec le stock physique pour réconciliation
+  articleId        String?     @unique
+  article          Article?    @relation(fields: [articleId], references: [id])
+}
+
+// 1. Stockage centralisé des fils de discussion multicanaux
+model VintedConversation {
+  id                String         @id // conversation_id natif Vinted
+  botAccountId      String
+  botAccount        BotAccount     @relation(fields: [botAccountId], references: [id])
+  buyerUsername     String
+  buyerPhoto        String?        @db.Text
+  title             String?        // Titre de l'article lié
+  itemId            String?        // ID de l'article lié
+  lastMessage       String?        @db.Text
+  lastMessageTime   DateTime
+  hasOffer          Boolean        @default(false)
+  offerPrice        Decimal?       @db.Decimal(10, 2)
+  offerStatus       String?        // PENDING, ACCEPTED, REJECTED
+  syncedAt          DateTime       @default(now())
+  messages          VintedMessage[]
+}
+
+model VintedMessage {
+  id                String             @id // message_id natif Vinted
+  conversationId    String
+  conversation      VintedConversation @relation(fields: [conversationId], references: [id])
+  senderUsername    String
+  content           String             @db.Text
+  createdAtVinted   DateTime
+}
+
+// 2. Métriques de performance pour détecter les Winners
+model VintedItemMetrics {
+  id                String      @id // item_id natif Vinted
+  botAccountId      String
+  botAccount        BotAccount  @relation(fields: [botAccountId], references: [id])
+  title             String
+  url               String?     @db.Text
+  photoUrl          String?     @db.Text
+  viewCount         Int         @default(0)
+  favouriteCount    Int         @default(0)
+  status            String?     // ex: "Vendu", "Actif"
+  isWinner          Boolean     @default(false)
+  winnerReason      String?     // "STATISTIQUES" ou "VENTE_RAPIDE"
+  sourcingUrl       String?     @db.Text // Reconstitution vers Shein/Temu
+  uploadedAtVinted  DateTime    // Date de publication pour la fenêtre 24h
+  updatedAt         DateTime    @updatedAt
+}
+
+// 3. File d'attente pour l'exécution des actions NextJS -> Vinted
+model BotActionQueue {
+  id                String      @id @default(uuid())
+  botAccountId      String
+  botAccount        BotAccount  @relation(fields: [botAccountId], references: [id])
+  actionType        String      // "SEND_MESSAGE", "ACCEPT_OFFER", "COUNTER_OFFER"
+  payload           Json        // Contient { conversationId, amount }
+  status            String      @default("PENDING") // PENDING, SUCCESS, FAILED
+  createdAt         DateTime    @default(now())
+  completedAt       DateTime?
+  errorMessage      String?     @db.Text
+}
+
