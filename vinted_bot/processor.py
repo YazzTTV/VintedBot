@@ -40,6 +40,34 @@ Formate obligatoirement ta reponse avec ces balises precises :
 [/PROMPT_IMAGE_ANGLAIS]"""
 
 
+PROMPT_ANALYSE_STROLLER = """{PERSONA}
+Je te donne une capture d'ecran d'une poussette pour chien sur un site e-commerce (Shein).
+
+IMPORTANT : Ne mentionne JAMAIS la marque du site d'origine (Shein, Temu, AliExpress, etc.) dans le titre ou la description. Le nom de la marque ne doit figurer sous aucun pretexte.
+
+IMPORTANT : Ne cree aucun fichier, document Google Docs ou PDF. N'utilise aucun outil. Reponds directement en texte brut.
+
+Effectue les taches suivantes :
+1. Identifie la poussette (type, couleur, materiaux apparents, fonctionnalites comme pliable, panier de rangement, etc.).
+2. Redige un titre clair et sympa pour Vinted (max 40 caracteres). {CONSIGNES_LANGUE} IMPORTANT : N'utilise AUCUN emoji (pas de smileys, pas de coeurs, etc.).
+3. Redige une description COURTE et CONCISE pour Vinted (maximum 3 à 4 courtes phrases simples). Le ton doit etre naturel, chaleureux, professionnel mais pas du tout robotique. N'utilise AUCUN hashtag (#) et N'utilise AUCUN emoji. {PHRASES_TYPIQUES} Precise obligatoirement l'etat (Neuf dans son emballage d'origine) et les fonctionnalites pratiques (pliable, roues robustes, espace confortable pour l'animal).
+4. Propose un court prompt en anglais decrivant uniquement le design, la couleur et la structure de la poussette (ex: "A modern black lightweight foldable dog stroller with four wheels and a mesh window").
+
+Formate obligatoirement ta reponse avec ces balises precises :
+
+[TITRE_VINTED]
+(titre ici)
+[/TITRE_VINTED]
+
+[DESCRIPTION_VINTED]
+(description ici)
+[/DESCRIPTION_VINTED]
+
+[PROMPT_IMAGE_ANGLAIS]
+(prompt ici)
+[/PROMPT_IMAGE_ANGLAIS]"""
+
+
 def _clean_forbidden_words(text: str) -> str:
     """
     Nettoie agressivement les mentions de marques d'origine interdites
@@ -178,14 +206,14 @@ def _parse_gemini_response(raw_text: str) -> dict | None:
     return None
 
 
-def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr") -> dict | None:
+def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr", niche: str = "garment") -> dict | None:
     """
     Analyse une capture produit Shein via Gemini Web (Edge CDP).
     Retourne un dict {titre_vinted, description_vinted, prompt_image_anglais}
     ou None en cas d'echec.
     Supports multi-language prompt adaptation ("fr", "nl", "lb", etc.)
     """
-    print(f"[Processor] Analyse de l'image via Gemini Web : {image_path} (Taille : {size}, Langue : {language.upper()})...")
+    print(f"[Processor] Analyse de l'image via Gemini Web : {image_path} (Taille : {size}, Langue : {language.upper()}, Niche : {niche.upper()})...")
     
     # --- DEFINITION DU PERSONA ET DES REGLES DE LANGUE ---
     persona = "Tu es une vendeuse reguliere et tres humaine sur Vinted."
@@ -207,13 +235,20 @@ def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr") -
         instructions_langue = f"IMPORTANT : Rédige le titre et la description EXCLUSIVEMENT dans la langue liée au code '{language}'."
         phrases_typiques = ""
 
-    # Injection des variables dans le prompt global
-    final_prompt = PROMPT_ANALYSE.format(
-        PERSONA=persona,
-        CONSIGNES_LANGUE=instructions_langue,
-        PHRASES_TYPIQUES=phrases_typiques,
-        TAILLE_CIBLE=size
-    )
+    # Injection des variables dans le prompt global selon la niche
+    if niche.lower() == "stroller":
+        final_prompt = PROMPT_ANALYSE_STROLLER.format(
+            PERSONA=persona,
+            CONSIGNES_LANGUE=instructions_langue,
+            PHRASES_TYPIQUES=phrases_typiques
+        )
+    else:
+        final_prompt = PROMPT_ANALYSE.format(
+            PERSONA=persona,
+            CONSIGNES_LANGUE=instructions_langue,
+            PHRASES_TYPIQUES=phrases_typiques,
+            TAILLE_CIBLE=size
+        )
 
     if not start_edge():
         print("[Processor] ERREUR : impossible de demarrer Edge.")

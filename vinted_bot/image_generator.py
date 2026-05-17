@@ -5,6 +5,7 @@ Utilise edge_browser.py pour la gestion de la connexion.
 """
 import os
 import time
+import random
 from playwright.sync_api import sync_playwright
 from edge_browser import (
     start_edge, open_gemini_page, upload_files,
@@ -212,11 +213,23 @@ def generate_selfie(prompt_anglais: str, input_image_path: str, output_path: str
         print(f"[Image Generator] ERREUR : avatar introuvable : {avatar}")
         return False
 
+    backgrounds = [
+        "dans une chambre différente et lumineuse avec un lit fait, un mur blanc et une plante verte en arrière-plan",
+        "dans un dressing moderne et chic avec des vêtements suspendus et des boîtes de rangement de manière ordonnée",
+        "dans une salle de bain épurée et très propre avec un miroir propre et un carrelage blanc contemporain",
+        "dans un salon chaleureux et lumineux avec un canapé crème et un tableau abstrait coloré au mur",
+        "dans un intérieur minimaliste de style scandinave avec un meuble en bois clair et une lumière douce",
+        "dans un appartement parisien avec des moulures blanches au mur et du parquet en arrière-plan",
+        "dans une pièce avec un mur de couleur neutre (beige ou gris clair) et un éclairage naturel venant d'une fenêtre"
+    ]
+    bg_choice = random.choice(backgrounds)
+    
     full_prompt = (
         "IMPORTANT : N'utilise aucune extension, application ou recherche Google. "
         "Genere directement l'image sans faire de recherche en ligne.\n\n"
-        f"Met la tenue de l'image 2 ({prompt_anglais}) a la fille de l'image 1. "
-        "Genere une seule photo ultra realiste, style selfie naturel dans un miroir. "
+        f"Prends la fille de l'image 1 (son visage, sa coiffure et sa silhouette générale) et mets-lui la tenue de l'image 2 ({prompt_anglais}).\n"
+        f"Genere une seule photo ultra realiste, style selfie naturel dans un miroir, mais change le decor de fond : place la fille {bg_choice}.\n"
+        "La pose de la fille et le décor de fond doivent avoir l'air spontanés, naturels et non retouchés. "
         "L'image doit obligatoirement etre au format vertical portrait 3:4 (aspect ratio 3:4) et parfaitement centree."
     )
 
@@ -319,12 +332,23 @@ def generate_flat_lay(prompt_anglais: str, input_image_path: str, output_path: s
         print(f"[Image Generator] ERREUR : modèle sol introuvable : {template}")
         return False
 
+    surfaces = [
+        "un sol en parquet de chêne clair avec des veines de bois naturelles et chaleureuses",
+        "un sol en parquet foncé de style vintage avec une texture de bois marquée",
+        "un tapis en laine beige ou crème épais et texturé",
+        "un tapis blanc moelleux et propre en fausse fourrure",
+        "un dessus de lit en lin ou coton blanc légèrement froissé, style scandinave épuré",
+        "un sol en béton ciré gris clair moderne et minimaliste"
+    ]
+    surface_choice = random.choice(surfaces)
+    
     full_prompt = (
         "IMPORTANT : N'utilise aucune extension, application ou recherche Google. "
         "Genere directement l'image sans faire de recherche en ligne.\n\n"
-        f"Remplace le vetement de l'image 1 par le vetement de l'image 2 ({prompt_anglais}). "
-        "Garde exactement le meme angle de vue du dessus et le meme sol en bois clair. "
-        "Genere une seule photo ultra realiste de ce vetement a plat sur le sol, sans aucun mannequin ni personne. "
+        f"Remplace le vetement de l'image 1 par le vetement de l'image 2 ({prompt_anglais}).\n"
+        f"Garde le vêtement parfaitement à plat (flat lay, vue du dessus à 90 degrés), mais change entièrement le sol : place-le sur {surface_choice}.\n"
+        "Génère une seule photo ultra réaliste et spontanée, avec des ombres naturelles sous le vêtement pour donner du relief. "
+        "Il ne doit y avoir aucun mannequin, aucun corps humain ni personne sur l'image.\n"
         "L'image doit obligatoirement etre au format vertical portrait 3:4 (aspect ratio 3:4) et parfaitement centree."
     )
 
@@ -412,4 +436,235 @@ def generate_flat_lay(prompt_anglais: str, input_image_path: str, output_path: s
             except Exception:
                 pass
             return False
+
+
+def generate_stroller_domestic(prompt_anglais: str, input_image_path: str, output_path: str) -> bool:
+    """
+    Génère une photo réaliste de la poussette placée dans un appartement (salon, entrée, etc.)
+    comme si elle avait été prise avec un smartphone par un particulier.
+    """
+    domestic_backgrounds = [
+        "dans le coin d'un salon moderne et lumineux, à côté d'une plante verte en pot et d'un canapé beige clair, avec du parquet au sol",
+        "dans l'entrée accueillante et propre d'une maison contemporaine, avec un paillasson propre et des murs de tons neutres",
+        "dans un couloir chic et bien éclairé, près d'un mur blanc cassé et d'une porte d'entrée",
+        "dans une pièce de vie épurée de style scandinave, avec de la lumière naturelle provenant d'une grande fenêtre",
+        "dans un dressing ou une chambre bien ordonnée, posée sur un sol en parquet de chêne clair"
+    ]
+    bg_choice = random.choice(domestic_backgrounds)
+    
+    full_prompt = (
+        "IMPORTANT : N'utilise aucune extension, application ou recherche Google. "
+        "Genere directement l'image sans faire de recherche en ligne.\n\n"
+        f"Prends la poussette de l'image 1 (identifiée par : {prompt_anglais}) et place-la de manière extrêmement réaliste dans un décor intérieur domestique : "
+        f"pose la poussette {bg_choice}.\n"
+        "Génère une seule photo ultra réaliste, style photo amateur prise à la va-vite avec un smartphone par son propriétaire dans son appartement. "
+        "Les ombres sous les roues et la poussette doivent être parfaitement naturelles et donner du relief.\n"
+        "Il ne doit y avoir aucun être humain ni aucune marque commerciale visible.\n"
+        "L'image doit obligatoirement être au format vertical portrait 3:4 (aspect ratio 3:4) et parfaitement centrée."
+    )
+
+    print(f"[Image Generator] Génération Poussette Intérieur en cours...")
+
+    if not start_edge():
+        return False
+
+    with sync_playwright() as p:
+        try:
+            browser, page = open_gemini_page(p)
+
+            # 1. Upload produit seul
+            print("[Image Generator] Upload de l'image produit...")
+            if not upload_files(page, [input_image_path]):
+                print("[Image Generator] ERREUR : upload echoue.")
+                page.close()
+                return False
+
+            # 2. Envoi du prompt
+            print("[Image Generator] Envoi du prompt...")
+            type_and_send(page, full_prompt)
+
+            # 3. Attente de la generation
+            wait_for_response(page, timeout_s=120)
+            time.sleep(3)
+
+            # Gestion de l'erreur "Reessayer sans les applis"
+            try:
+                retry_selectors = [
+                    'button:has-text("R\u00e9essayer sans les applis")',
+                    'a:has-text("R\u00e9essayer sans les applis")',
+                    'span:has-text("R\u00e9essayer sans les applis")',
+                    'text="R\u00e9essayer sans les applis"',
+                    'text="without apps"'
+                ]
+                for r_sel in retry_selectors:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=1500):
+                        print("[Image Generator] [WARN] Detection du bouton 'Reessayer sans les applis'. Clic force...")
+                        try:
+                            btn.click(force=True, timeout=5000)
+                        except Exception:
+                            page.evaluate("el => el.click()", btn)
+                        print("[Image Generator] Attente de la nouvelle generation sans les applis...")
+                        wait_for_response(page, timeout_s=120)
+                        time.sleep(3)
+                        break
+            except Exception as e:
+                print(f"[Image Generator] Note : Echec du clic de secours : {e}")
+
+            # 4. Recuperation de l'image generee
+            print("[Image Generator] Recherche de l'image generee...")
+            bot_responses = page.locator("message-content")
+            last_response = bot_responses.nth(bot_responses.count() - 1)
+
+            images = last_response.locator("img").all()
+            target_img = None
+            max_area = 0
+
+            for img in images:
+                box = img.bounding_box()
+                if box:
+                    area = box["width"] * box["height"]
+                    if area > max_area:
+                        max_area = area
+                        target_img = img
+
+            if target_img and max_area > 10000:
+                success = _save_gemini_image(page, target_img, output_path)
+                page.close()
+                if success:
+                    crop_black_borders(output_path, output_path)
+                return success
+            else:
+                print("[Image Generator] Aucune image generee. Screenshot de secours...")
+                page.screenshot(path=output_path + "_erreur.png")
+                page.close()
+                return False
+
+        except Exception as e:
+            print(f"[Image Generator] Erreur critique Poussette : {e}")
+            try:
+                page.close()
+            except Exception:
+                pass
+            return False
+
+
+def generate_stroller_with_dog(prompt_anglais: str, input_image_path: str, output_path: str) -> bool:
+    """
+    Génère une photo réaliste de la même poussette avec un petit chien mignon assis à l'intérieur,
+    dans un décor appartement ou extérieur résidentiel réaliste.
+    """
+    dogs = [
+        "un adorable petit spitz nain (Pomeranian) tout poilu et souriant",
+        "un mignon petit carlin (Pug) avec de grands yeux expressifs",
+        "un adorable chiot golden retriever très doux",
+        "un très mignon petit bouledogue français aux oreilles dressées",
+        "un petit chihuahua joyeux et mignon"
+    ]
+    dog_choice = random.choice(dogs)
+    
+    domestic_backgrounds = [
+        "dans le coin d'un salon moderne et chaleureux",
+        "dans l'entrée propre d'un appartement, à côté d'une plante verte",
+        "près d'une grande baie vitrée lumineuse avec du parquet au sol",
+        "dans une pièce de vie scandinave lumineuse"
+    ]
+    bg_choice = random.choice(domestic_backgrounds)
+
+    full_prompt = (
+        "IMPORTANT : N'utilise aucune extension, application ou recherche Google. "
+        "Genere directement l'image sans faire de recherche en ligne.\n\n"
+        f"Prends la poussette de l'image 1 (identifiée par : {prompt_anglais}) et place-la de manière extrêmement réaliste {bg_choice}.\n"
+        f"IMPORTANT : Ajoute {dog_choice} confortablement assis ou debout à l'intérieur de la nacelle de la poussette. "
+        "Le chien doit avoir l'air très mignon, calme et heureux, en regardant en direction de la caméra.\n"
+        "Génère une seule photo ultra réaliste, style photo amateur prise avec un smartphone par le propriétaire de l'animal. "
+        "Il ne doit y avoir aucun être humain visible dans l'image.\n"
+        "L'image doit obligatoirement être au format vertical portrait 3:4 (aspect ratio 3:4) et parfaitement centrée."
+    )
+
+    print(f"[Image Generator] Génération Poussette avec Chien en cours...")
+
+    if not start_edge():
+        return False
+
+    with sync_playwright() as p:
+        try:
+            browser, page = open_gemini_page(p)
+
+            # 1. Upload produit seul
+            print("[Image Generator] Upload de l'image produit...")
+            if not upload_files(page, [input_image_path]):
+                print("[Image Generator] ERREUR : upload echoue.")
+                page.close()
+                return False
+
+            # 2. Envoi du prompt
+            print("[Image Generator] Envoi du prompt...")
+            type_and_send(page, full_prompt)
+
+            # 3. Attente de la generation
+            wait_for_response(page, timeout_s=120)
+            time.sleep(3)
+
+            # Gestion de l'erreur "Reessayer sans les applis"
+            try:
+                retry_selectors = [
+                    'button:has-text("R\u00e9essayer sans les applis")',
+                    'a:has-text("R\u00e9essayer sans les applis")',
+                    'span:has-text("R\u00e9essayer sans les applis")',
+                    'text="R\u00e9essayer sans les applis"',
+                    'text="without apps"'
+                ]
+                for r_sel in retry_selectors:
+                    btn = page.locator(r_sel).first
+                    if btn.is_visible(timeout=1500):
+                        print("[Image Generator] [WARN] Detection du bouton 'Reessayer sans les applis'. Clic force...")
+                        try:
+                            btn.click(force=True, timeout=5000)
+                        except Exception:
+                            page.evaluate("el => el.click()", btn)
+                        print("[Image Generator] Attente de la nouvelle generation sans les applis...")
+                        wait_for_response(page, timeout_s=120)
+                        time.sleep(3)
+                        break
+            except Exception as e:
+                print(f"[Image Generator] Note : Echec du clic de secours : {e}")
+
+            # 4. Recuperation de l'image generee
+            print("[Image Generator] Recherche de l'image generee...")
+            bot_responses = page.locator("message-content")
+            last_response = bot_responses.nth(bot_responses.count() - 1)
+
+            images = last_response.locator("img").all()
+            target_img = None
+            max_area = 0
+
+            for img in images:
+                box = img.bounding_box()
+                if box:
+                    area = box["width"] * box["height"]
+                    if area > max_area:
+                        max_area = area
+                        target_img = img
+
+            if target_img and max_area > 10000:
+                success = _save_gemini_image(page, target_img, output_path)
+                page.close()
+                if success:
+                    crop_black_borders(output_path, output_path)
+                return success
+            else:
+                print("[Image Generator] Aucune image generee. Screenshot de secours...")
+                page.screenshot(path=output_path + "_erreur.png")
+                page.close()
+                return False
+
+        except Exception as e:
+            print(f"[Image Generator] Erreur critique Poussette Chien : {e}")
+            try:
+                page.close()
+            except Exception:
+                pass
+            return False
+
 

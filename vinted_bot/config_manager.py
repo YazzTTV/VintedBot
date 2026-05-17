@@ -25,9 +25,10 @@ class AccountConfig:
         self.size = "S" # Par défaut
         self.language = "fr" # Par défaut ("fr", "nl", etc.)
         self.prompt_style = "" # Custom prompt tweaks
+        self.niche = "garment" # Par défaut ("garment", "stroller", etc.)
         
         self._load_settings()
-
+ 
     def _load_settings(self):
         if os.path.exists(self.settings_path):
             try:
@@ -36,9 +37,10 @@ class AccountConfig:
                     self.size = data.get("size", self.size)
                     self.language = data.get("language", self.language)
                     self.prompt_style = data.get("prompt_style", self.prompt_style)
+                    self.niche = data.get("niche", self.niche)
             except Exception:
                 pass
-
+ 
     def ensure_dirs(self):
         """Crée l'arborescence pour ce compte si elle n'existe pas."""
         os.makedirs(self.input_dir, exist_ok=True)
@@ -60,7 +62,7 @@ class AccountConfig:
         # Initialiser settings.json si manquant
         if not os.path.exists(self.settings_path):
             with open(self.settings_path, 'w', encoding='utf-8') as f:
-                json.dump({"size": self.size, "language": self.language, "prompt_style": self.prompt_style}, f, indent=2)
+                json.dump({"size": self.size, "language": self.language, "prompt_style": self.prompt_style, "niche": self.niche}, f, indent=2)
         else:
             # S'assurer que les nouveaux champs par défaut sont injectés dans les fichiers existants
             try:
@@ -70,6 +72,9 @@ class AccountConfig:
                 updated = False
                 if "language" not in data:
                     data["language"] = self.language
+                    updated = True
+                if "niche" not in data:
+                    data["niche"] = self.niche
                     updated = True
                 
                 if updated:

@@ -19,12 +19,13 @@ import {
   Pencil
 } from "lucide-react"
 import { cn, addWorkingDays } from "@/lib/utils"
+import { useDiagnostic } from "@/context/DiagnosticContext"
 
 export default function CommandesPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isSuccess, setIsSuccess] = useState(false)
-  const [testClickCount, setTestClickCount] = useState(0)
-  const [pastCommandes, setPastCommandes] = useState([])
+  const [processingId, setProcessingId] = useState<string | null>(null)
+  const [pastCommandes, setPastCommandes] = useState<any[]>([])
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false)
   const [historyFilter, setHistoryFilter] = useState("")
   
@@ -36,17 +37,67 @@ export default function CommandesPage() {
     numero: '',
     fournisseur: 'SHEIN',
     notes: '',
-    dateArriveeEstimee: ''
+    dateArriveeEstimee: '',
+    dateCommande: '',
+    prixTotal: '',
+    fraisPort: '',
+    panier: [] as any[]
   })
 
   // NOUVEAU : Gestion Modal Validation Rapide
   const [isValidateModalOpen, setIsValidateModalOpen] = useState(false)
   const [validationCmd, setValidationCmd] = useState<any>(null)
   const [validationNum, setValidationNum] = useState('')
+  const { addDiagLog, setIsDiagConsoleOpen } = useDiagnostic()
   
+  const [confirmingArrivalId, setConfirmingArrivalId] = useState<string | null>(null)
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
+
+  // Intercepter les erreurs globales pour le diagnostic
+  useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      addDiagLog(`ERREUR JS : ${event.message} à ${event.filename}:${event.lineno}`)
+    }
+    window.addEventListener('error', handleError)
+    return () => window.removeEventListener('error', handleError)
+  }, [])
+
+  const runDiagnostic = async () => {
+    addDiagLog("Démarrage du diagnostic...")
+    setIsDiagConsoleOpen(true)
+    
+    // 1. Test API Commandes
+    try {
+      addDiagLog("Test de connexion API (/api/commandes)...")
+      const start = Date.now()
+      const res = await fetch('/api/commandes')
+      const end = Date.now()
+      if (res.ok) {
+        const data = await res.json()
+        addDiagLog(`✅ API OK (${end - start}ms). ${data.data?.length || 0} commandes trouvées.`)
+      } else {
+        addDiagLog(`❌ API Erreur HTTP ${res.status}`)
+      }
+    } catch (e: any) {
+      addDiagLog(`❌ Erreur réseau API : ${e.message}`)
+    }
+
+    // 2. Vérification de l'état local
+    addDiagLog(`Vérification état local : ${pastCommandes.length} commandes en mémoire.`)
+    if (pastCommandes.length > 0) {
+      const first = pastCommandes[0]
+      addDiagLog(`Exemple Commande ID: ${first.id} | Numéro: ${first.numero} | Statut: ${first.statut}`)
+    }
+
+    // 3. Test de l'existence de window.confirm
+    addDiagLog(`window.confirm disponible : ${typeof window.confirm === 'function'}`)
+
+    addDiagLog("Diagnostic terminé. Veuillez copier ce rapport.")
+  }
+
   // NOUVEAU : États pour le moteur d'importation Sourcing direct
   const [sourcingQuery, setSourcingQuery] = useState("")
-  const [sourcingHits, setSourcingHits] = useState([])
+  const [sourcingHits, setSourcingHits] = useState<any[]>([])
   const [isSearchingHits, setIsSearchingHits] = useState(false)
 
   // Champs de formulaire contrôlés
@@ -201,22 +252,40 @@ export default function CommandesPage() {
     }
   }
 
-  const handleMarkArrived = async (cmdId: string, e?: any) => {
+  const handleMarkArrived = async (cmdId: string, e?: React.MouseEvent) => {
     if (e) {
-      e.stopPropagation();
-      e.preventDefault();
+      e.stopPropagation()
+      e.preventDefault()
     }
-    if (!window.confirm("Confirmer l'arrivée de ce colis ? Les articles seront ajoutés à votre stock disponible.")) return
+    
+    addDiagLog(`CLIC: Ouverture modale confirmation pour ID: ${cmdId}`)
+    setConfirmingArrivalId(cmdId)
+  }
+
+  const executeMarkArrived = async () => {
+    if (!confirmingArrivalId) return
+    const cmdId = confirmingArrivalId
+    setConfirmingArrivalId(null)
+    
+    setProcessingId(cmdId)
+    addDiagLog(`EXÉCUTION: Tentative "Recevoir" pour ID: ${cmdId}`)
+    
     try {
+      addDiagLog(`ENVOI: POST /api/commandes/${cmdId}/arrivee`)
       const res = await fetch(`/api/commandes/${cmdId}/arrivee`, { method: 'POST' })
       const d = await res.json()
       if (d.success) {
+        addDiagLog(`SUCCÈS: Commande ${cmdId} reçue`)
         fetchCommandes()
       } else {
+        addDiagLog(`ERREUR API: ${d.error || "Erreur inconnue"}`)
         alert(d.error || "Erreur")
       }
-    } catch (e) { 
+    } catch (e: any) { 
+      addDiagLog(`ERREUR RÉSEAU: ${e.message}`)
       alert("Erreur de communication") 
+    } finally {
+      setProcessingId(null)
     }
   }
 
@@ -226,33 +295,80 @@ export default function CommandesPage() {
       e.preventDefault();
     }
     
-    if (!window.confirm("⚠️ ES-TU SÛR ? Supprimer cette commande supprimera également TOUS ses articles reliés du stock. Cette action est irréversible.")) return
-    
+    addDiagLog(`CLIC: Ouverture modale suppression pour ID: ${id}`)
+    setConfirmingDeleteId(id)
     setOpenPopoverId(null)
+  }
+
+  const executeDeleteCommande = async () => {
+    if (!confirmingDeleteId) return
+    const id = confirmingDeleteId
+    setConfirmingDeleteId(null)
+    
+    addDiagLog(`EXÉCUTION: Tentative de suppression définitive pour ID: ${id}`)
     
     try {
       const res = await fetch(`/api/commandes/${id}`, { method: 'DELETE' })
       const d = await res.json()
       if (d.success) {
+        addDiagLog(`SUCCÈS: Commande ${id} supprimée`)
         fetchCommandes()
       } else {
+        addDiagLog(`ERREUR API: ${d.error || "Inconnue"}`)
         alert("❌ Erreur : " + (d.error || "Inconnue"))
       }
-    } catch (e) {
+    } catch (e: any) {
+      addDiagLog(`ERREUR RÉSEAU: ${e.message}`)
       console.error("Delete Error:", e)
     }
   }
 
-  const handleOpenEditModal = (cmd: any) => {
+  const handleOpenEditModal = async (cmd: any) => {
     setOpenPopoverId(null)
-    setActiveCmdToEdit(cmd)
-    setEditForm({
-      numero: cmd.numero,
-      fournisseur: cmd.fournisseur,
-      notes: cmd.notes || '',
-      dateArriveeEstimee: cmd.dateArriveeEstimee ? new Date(cmd.dateArriveeEstimee).toISOString().substring(0, 10) : ''
-    })
-    setIsEditModalOpen(true)
+    addDiagLog(`CHARGEMENT: Détails commande ${cmd.id}`)
+    
+    try {
+      const res = await fetch(`/api/commandes/${cmd.id}`)
+      const d = await res.json()
+      if (d.success) {
+        const fullCmd = d.data
+        setActiveCmdToEdit(fullCmd)
+        
+        // Transformer les articles existants en format "panier" pour l'édition
+        // Pour l'édition, on groupe les articles par nom/lien pour retrouver la vue "panier"
+        // Ou plus simple: on affiche chaque article individuellement s'ils sont différents.
+        // Ici on va essayer de regrouper par nom + lien
+        const groupedPanier: any[] = []
+        fullCmd.articles.forEach((art: any) => {
+           const existing = groupedPanier.find(p => p.nom === art.nom && p.lien === art.lienProduit)
+           if (existing) {
+             existing.quantite += 1
+           } else {
+             groupedPanier.push({
+               id: art.id, // On garde l'ID pour le premier de la série (important pour le PATCH)
+               nom: art.nom,
+               lien: art.lienProduit,
+               quantite: 1,
+               prixUnitaire: art.prixAchatUnitaire.toString()
+             })
+           }
+        })
+
+        setEditForm({
+          numero: fullCmd.numero,
+          fournisseur: fullCmd.fournisseur,
+          notes: fullCmd.notes || '',
+          dateCommande: new Date(fullCmd.dateCommande).toISOString().substring(0, 10),
+          dateArriveeEstimee: fullCmd.dateArriveeEstimee ? new Date(fullCmd.dateArriveeEstimee).toISOString().substring(0, 10) : '',
+          prixTotal: fullCmd.prixTotal.toString(),
+          fraisPort: fullCmd.fraisPort.toString(),
+          panier: groupedPanier
+        })
+        setIsEditModalOpen(true)
+      }
+    } catch (e: any) {
+      addDiagLog(`ERREUR CHARGEMENT: ${e.message}`)
+    }
   }
 
   const handleEditSubmit = async (e: React.FormEvent) => {
@@ -783,8 +899,8 @@ export default function CommandesPage() {
 
                               {openPopoverId === cmd.id && (
                                 <>
-                                  <div className="fixed inset-0 z-10" onClick={() => setOpenPopoverId(null)} />
-                                  <div className="absolute right-0 mt-1 w-32 rounded-xl bg-zinc-950 border border-zinc-800 p-1.5 shadow-2xl z-20 animate-in fade-in zoom-in-95 duration-100 text-left">
+                                  <div className="fixed inset-0 z-[40]" onClick={() => setOpenPopoverId(null)} />
+                                  <div className="absolute right-0 mt-1 w-32 rounded-xl bg-zinc-950 border border-zinc-800 p-1.5 shadow-2xl z-[50] animate-in fade-in zoom-in-95 duration-100 text-left">
                                     {isUrgence && (
                                       <button
                                         type="button"
@@ -844,15 +960,24 @@ export default function CommandesPage() {
 
                     <button 
                       type="button"
+                      disabled={processingId === cmd.id}
                       onClick={(e) => handleMarkArrived(cmd.id, e)}
                       className={cn(
-                        "mt-1 w-full py-2 text-white text-[11px] font-bold rounded-lg transition-all shadow-md flex items-center justify-center gap-1.5 z-30 relative cursor-pointer",
+                        "mt-1 w-full py-2 text-white text-[11px] font-bold rounded-lg transition-all shadow-md flex items-center justify-center gap-1.5 relative cursor-pointer",
+                        processingId === cmd.id ? "opacity-50 cursor-wait" : "",
                         isLate 
                           ? "bg-amber-600 hover:bg-amber-500 shadow-amber-900/10" 
                           : "bg-emerald-600/90 hover:bg-emerald-500"
                       )}
                     >
-                      <CheckCircle className="w-3.5 h-3.5" /> Recevoir & Mettre en Stock
+                      {processingId === cmd.id ? (
+                        <>⏳ Traitement...</>
+                      ) : (
+                        <>
+                          <CheckCircle className="w-3.5 h-3.5" /> 
+                          Recevoir & Mettre en Stock
+                        </>
+                      )}
                     </button>
                   </div>
                 )})}
@@ -959,8 +1084,8 @@ export default function CommandesPage() {
 
                               {openPopoverId === `hist-${cmd.id}` && (
                                 <>
-                                  <div className="fixed inset-0 z-[60]" onClick={() => setOpenPopoverId(null)} />
-                                  <div className="absolute right-0 mt-1 w-32 rounded-xl bg-zinc-950 border border-zinc-800 p-1.5 shadow-2xl z-[70] animate-in fade-in zoom-in-95 duration-100 text-left">
+                                  <div className="fixed inset-0 z-[80]" onClick={() => setOpenPopoverId(null)} />
+                                  <div className="absolute right-0 mt-1 w-32 rounded-xl bg-zinc-950 border border-zinc-800 p-1.5 shadow-2xl z-[90] animate-in fade-in zoom-in-95 duration-100 text-left">
                                     {isUrgence && (
                                       <button
                                         type="button"
@@ -1027,12 +1152,9 @@ export default function CommandesPage() {
                         {cmd.statut !== 'RECUE' ? (
                           <button 
                             type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleMarkArrived(cmd.id, e);
-                            }}
+                            onClick={(e) => handleMarkArrived(cmd.id, e)}
                             className={cn(
-                              "mt-2 w-full font-bold py-1.5 px-3 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5 text-white z-30 relative cursor-pointer",
+                              "mt-2 w-full font-bold py-1.5 px-3 rounded-lg text-[11px] transition-colors flex items-center justify-center gap-1.5 text-white relative cursor-pointer",
                               isLate ? "bg-amber-600 hover:bg-amber-500" : "bg-emerald-600 hover:bg-emerald-500"
                             )}
                           >
@@ -1076,19 +1198,31 @@ export default function CommandesPage() {
               </div>
             </div>
 
-            <form onSubmit={handleEditSubmit} className="space-y-5">
+            <form onSubmit={handleEditSubmit} className="space-y-5 max-h-[80vh] overflow-y-auto pr-2 scrollbar-thin">
               
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-zinc-400">Fournisseur</label>
-                <select 
-                  value={editForm.fournisseur}
-                  onChange={e => setEditForm({...editForm, fournisseur: e.target.value})}
-                  className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl px-4 py-2.5 text-sm outline-none focus:border-amber-500/50 transition-all cursor-pointer"
-                >
-                  <option value="SHEIN">🛍️ SHEIN</option>
-                  <option value="TEMU">📦 TEMU</option>
-                  <option value="AUTRE">🏷️ AUTRE</option>
-                </select>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-400">Fournisseur</label>
+                  <select 
+                    value={editForm.fournisseur}
+                    onChange={e => setEditForm({...editForm, fournisseur: e.target.value})}
+                    className="w-full bg-zinc-900 border border-zinc-800 text-white rounded-xl px-4 py-2.5 text-sm outline-none focus:border-amber-500/50 transition-all cursor-pointer"
+                  >
+                    <option value="SHEIN">🛍️ SHEIN</option>
+                    <option value="TEMU">📦 TEMU</option>
+                    <option value="AUTRE">🏷️ AUTRE</option>
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-400">Date Commande</label>
+                  <input 
+                    type="date" 
+                    required
+                    value={editForm.dateCommande}
+                    onChange={e => setEditForm({...editForm, dateCommande: e.target.value})}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-amber-500/50 transition-all" 
+                  />
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1100,6 +1234,98 @@ export default function CommandesPage() {
                   onChange={e => setEditForm({...editForm, numero: e.target.value})}
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-amber-500/50 transition-all" 
                 />
+              </div>
+
+              {/* SECTION PANIER DANS L'ÉDITION */}
+              <div className="space-y-3 bg-zinc-900/30 p-4 rounded-2xl border border-zinc-800/50">
+                 <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-black uppercase tracking-widest text-zinc-500">Contenu de la Commande</label>
+                    <button 
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, panier: [...editForm.panier, { nom: '', lien: '', quantite: 1, prixUnitaire: '' }] })}
+                      className="text-amber-500 hover:text-amber-400 text-[10px] font-bold flex items-center gap-1"
+                    >
+                      <PlusCircle className="w-3 h-3" /> Ajouter
+                    </button>
+                 </div>
+                 
+                 <div className="space-y-3">
+                    {editForm.panier.map((item, idx) => (
+                      <div key={idx} className="grid grid-cols-12 gap-2 items-start bg-black/20 p-2 rounded-lg relative group">
+                        <div className="col-span-2">
+                           <input 
+                             type="number"
+                             placeholder="Qté"
+                             value={item.quantite}
+                             onChange={e => {
+                               const newPanier = [...editForm.panier]
+                               newPanier[idx].quantite = e.target.value
+                               setEditForm({ ...editForm, panier: newPanier })
+                             }}
+                             className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-white"
+                           />
+                        </div>
+                        <div className="col-span-9 flex flex-col gap-1">
+                           <input 
+                             type="text"
+                             placeholder="Nom du produit"
+                             value={item.nom}
+                             onChange={e => {
+                               const newPanier = [...editForm.panier]
+                               newPanier[idx].nom = e.target.value
+                               setEditForm({ ...editForm, panier: newPanier })
+                             }}
+                             className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-white"
+                           />
+                           <input 
+                             type="text"
+                             placeholder="Lien/URL"
+                             value={item.lien || item.url || ''}
+                             onChange={e => {
+                               const newPanier = [...editForm.panier]
+                               newPanier[idx].lien = e.target.value
+                               setEditForm({ ...editForm, panier: newPanier })
+                             }}
+                             className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-[9px] text-zinc-500"
+                           />
+                        </div>
+                        <div className="col-span-1 pt-1">
+                           <button 
+                             type="button"
+                             onClick={() => setEditForm({ ...editForm, panier: editForm.panier.filter((_, i) => i !== idx) })}
+                             className="text-zinc-600 hover:text-rose-500 transition-colors"
+                           >
+                             <Trash2 className="w-4 h-4" />
+                           </button>
+                        </div>
+                      </div>
+                    ))}
+                 </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-400">Prix Total (€)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    required
+                    value={editForm.prixTotal}
+                    onChange={e => setEditForm({...editForm, prixTotal: e.target.value})}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-amber-500/50 transition-all" 
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-xs font-medium text-zinc-400">Frais de Port (€)</label>
+                  <input 
+                    type="number" 
+                    step="0.01"
+                    required
+                    value={editForm.fraisPort}
+                    onChange={e => setEditForm({...editForm, fraisPort: e.target.value})}
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-amber-500/50 transition-all" 
+                  />
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -1196,6 +1422,78 @@ export default function CommandesPage() {
           </div>
         </div>
       )}
+      {/* --- MODALE DE CONFIRMATION DE SUPPRESSION --- */}
+      {confirmingDeleteId && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 backdrop-blur-md bg-black/60 animate-in fade-in duration-200">
+          <div className="bg-zinc-950 border border-red-900/30 rounded-3xl w-full max-w-sm p-8 shadow-2xl relative overflow-hidden text-center">
+             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-red-600 to-rose-400"></div>
+             
+             <div className="w-16 h-16 bg-red-500/10 rounded-2xl flex items-center justify-center text-red-500 mx-auto mb-4 border border-red-500/20">
+                <Trash2 className="w-8 h-8" />
+             </div>
+
+             <h3 className="text-xl font-bold text-white mb-2">Supprimer la Commande ?</h3>
+             <p className="text-sm text-zinc-400 mb-8 leading-relaxed">
+               ⚠️ **ATTENTION :** Cette action est irréversible. Cela supprimera la commande **ET tous les articles associés** de ton inventaire.
+             </p>
+
+             <div className="flex flex-col gap-2">
+                <button 
+                  onClick={executeDeleteCommande}
+                  className="w-full py-3 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl shadow-lg shadow-red-900/20 transition-all"
+                >
+                  Oui, supprimer définitivement
+                </button>
+                <button 
+                  onClick={() => {
+                    addDiagLog("ANNULATION: Fermeture modale suppression")
+                    setConfirmingDeleteId(null)
+                  }}
+                  className="w-full py-3 bg-zinc-900 hover:bg-zinc-800 text-zinc-500 font-bold rounded-xl border border-zinc-800 transition-all"
+                >
+                  Non, garder la commande
+                </button>
+             </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODALE DE CONFIRMATION D'ARRIVÉE --- */}
+      {confirmingArrivalId && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 backdrop-blur-md bg-black/60 animate-in fade-in duration-200">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-sm p-8 shadow-2xl relative overflow-hidden text-center">
+             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-blue-500"></div>
+             
+             <div className="w-16 h-16 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 mx-auto mb-4 border border-emerald-500/20">
+                <CheckCircle className="w-8 h-8" />
+             </div>
+
+             <h3 className="text-xl font-bold text-white mb-2">Confirmer la Réception ?</h3>
+             <p className="text-sm text-zinc-400 mb-8 leading-relaxed">
+               Es-tu sûr que ce colis est bien arrivé ? Tous les articles associés seront immédiatement transférés dans ton **Stock Physique**.
+             </p>
+
+             <div className="flex gap-3">
+                <button 
+                  onClick={() => {
+                    addDiagLog("ANNULATION: Fermeture modale confirmation")
+                    setConfirmingArrivalId(null)
+                  }}
+                  className="flex-1 py-3 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 font-bold rounded-xl border border-zinc-800 transition-all"
+                >
+                  Non, annuler
+                </button>
+                <button 
+                  onClick={executeMarkArrived}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-900/20 transition-all"
+                >
+                  Oui, c'est reçu
+                </button>
+             </div>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }

@@ -15,7 +15,8 @@ import {
   Archive,
   Search,
   MessageSquare,
-  Flame
+  Flame,
+  Boxes
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -24,9 +25,9 @@ const navigation = [
   { name: 'Inbox 💬', href: '/inbox', icon: MessageSquare },
   { name: 'Winners 🔥', href: '/winners', icon: Flame },
   { name: 'Commandes', href: '/commandes', icon: ShoppingBag },
-  { name: 'Stock', href: '/stock', icon: Package },
+  { name: 'Stock', href: '/stock', icon: Boxes },
   { name: 'Ventes', href: '/ventes', icon: Tag },
-  { name: 'Colis', href: '/parcels', icon: Package },
+  { name: 'Suivi Colis', href: '/parcels', icon: Package },
   { name: 'Expéditions', href: '/expeditions', icon: Truck },
   { name: 'Sourcing', href: '/sourcing', icon: Search },
   { name: 'Archives', href: '/archives', icon: Archive },

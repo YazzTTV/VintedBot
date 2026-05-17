@@ -20,7 +20,7 @@ import {
 import { cn } from "@/lib/utils"
 
 export default function StockPage() {
-  const [articles, setArticles] = useState([])
+  const [articles, setArticles] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   

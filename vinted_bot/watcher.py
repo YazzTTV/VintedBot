@@ -10,7 +10,7 @@ from watchdog.events import FileSystemEventHandler
 load_dotenv() # Charge l'éventuel webhook url depuis .env
 
 from processor import analyze_screenshot
-from image_generator import generate_selfie, generate_flat_lay
+from image_generator import generate_selfie, generate_flat_lay, generate_stroller_domestic, generate_stroller_with_dog
 from chatgpt_upscaler import upscale_image_with_chatgpt
 from config_manager import get_account_config
 from humanizer import humanize_image
@@ -93,7 +93,7 @@ class ScreenshotHandler(FileSystemEventHandler):
                 
         # 1. Analyse via Gemini Vision
         print(f"[Watcher] Demarrage du pipeline pour {filename} (Lien : {shein_url})...")
-        data = analyze_screenshot(file_path, size=self.config.size, language=self.config.language)
+        data = analyze_screenshot(file_path, size=self.config.size, language=self.config.language, niche=self.config.niche)
         if not data:
             print("[Watcher] [ERROR] Echec de l'analyse de l'image.")
             return
@@ -146,41 +146,50 @@ class ScreenshotHandler(FileSystemEventHandler):
         # Copie de l'image originale pour archivage
         shutil.copy2(file_path, os.path.join(product_dir, f"original_{filename}"))
         
-        # 2. Generation du selfie
+        # Détection de la niche (poussettes vs vêtements)
+        is_stroller = (self.config.niche == "stroller")
+        
+        # 2. Generation de la première image (selfie ou poussette domestique)
         output_image_path = os.path.join(product_dir, "selfie.jpg")
-        selfie_success = generate_selfie(prompt, file_path, output_image_path, self.config.avatar_path)
+        if is_stroller:
+            selfie_success = generate_stroller_domestic(prompt, file_path, output_image_path)
+        else:
+            selfie_success = generate_selfie(prompt, file_path, output_image_path, self.config.avatar_path)
         
         selfie_upscaled_path = None
         if selfie_success:
-            print(f"[Watcher] [OK] Selfie genere.")
-            # 3. Upscaling du selfie via ChatGPT
-            print(f"[Watcher] Lancement de l'upscaling ChatGPT pour le selfie...")
+            print(f"[Watcher] [OK] Première image générée.")
+            # 3. Upscaling de la première image via ChatGPT
+            print(f"[Watcher] Lancement de l'upscaling ChatGPT pour la première image...")
             upscaled_path = os.path.join(product_dir, "selfie_upscaled.jpg")
             if upscale_image_with_chatgpt(output_image_path, upscaled_path):
-                print(f"[Watcher] [OK] Selfie upscale avec succes.")
+                print(f"[Watcher] [OK] Première image upscalée avec succès.")
                 selfie_upscaled_path = upscaled_path
             else:
-                print(f"[Watcher] [WARN] Echec de l'upscaling du selfie.")
+                print(f"[Watcher] [WARN] Echec de l'upscaling de la première image.")
         else:
-            print(f"[Watcher] [ERROR] Echec de la generation du selfie.")
+            print(f"[Watcher] [ERROR] Echec de la generation de la première image.")
             
-        # 3. Generation du vêtement à plat (Flat Lay)
+        # 3. Generation de la deuxième image (Flat Lay ou poussette avec chien)
         flat_lay_output_path = os.path.join(product_dir, "flat_lay.jpg")
-        flat_lay_success = generate_flat_lay(prompt, file_path, flat_lay_output_path, self.config.floor_template_path)
+        if is_stroller:
+            flat_lay_success = generate_stroller_with_dog(prompt, file_path, flat_lay_output_path)
+        else:
+            flat_lay_success = generate_flat_lay(prompt, file_path, flat_lay_output_path, self.config.floor_template_path)
         
         flat_lay_upscaled_path = None
         if flat_lay_success:
-            print(f"[Watcher] [OK] Image Flat Lay generee.")
-            # Upscaling du flat lay via ChatGPT
-            print(f"[Watcher] Lancement de l'upscaling ChatGPT pour le Flat Lay...")
+            print(f"[Watcher] [OK] Deuxième image générée.")
+            # Upscaling de la deuxième image via ChatGPT
+            print(f"[Watcher] Lancement de l'upscaling ChatGPT pour la deuxième image...")
             upscaled_flat_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
             if upscale_image_with_chatgpt(flat_lay_output_path, upscaled_flat_path):
-                print(f"[Watcher] [OK] Flat Lay upscale avec succes.")
+                print(f"[Watcher] [OK] Deuxième image upscalée avec succès.")
                 flat_lay_upscaled_path = upscaled_flat_path
             else:
-                print(f"[Watcher] [WARN] Echec de l'upscaling du Flat Lay.")
+                print(f"[Watcher] [WARN] Echec de l'upscaling de la deuxième image.")
         else:
-            print(f"[Watcher] [ERROR] Echec de la generation du Flat Lay.")
+            print(f"[Watcher] [ERROR] Echec de la generation de la deuxième image.")
             
         # 4. Copie finale synchronisee vers la racine de OUTPUT_DIR pour declencher MacroDroid
         if selfie_upscaled_path or flat_lay_upscaled_path:

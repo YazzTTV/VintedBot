@@ -6,6 +6,7 @@ Moteur d'Humanisation des Images pour Vinted Bot.
 import os
 import random
 import datetime
+import numpy as np
 from PIL import Image, ImageEnhance
 
 def get_iphone_profile():
@@ -31,45 +32,57 @@ def get_iphone_profile():
 
 def apply_human_transform(img: Image.Image) -> Image.Image:
     """
-    Applique un micro-mouvement aléatoire pour briser le hachage de fond static :
-    - Rotation aléatoire imperceptible (-0.5° à +0.5°)
-    - Zoom/Crop aléatoire (2% à 4%)
-    - Micro-ajustement de la luminosité/contraste (+/- 2%)
+    Applique des transformations aléatoires musclées pour briser le hachage perceptuel :
+    - Rotation aléatoire naturelle (-1.8° à +1.8°)
+    - Zoom/Crop aléatoire (4% à 9%) pour varier le cadrage du décor
+    - Micro-décalage du centre (jusqu'à 15px)
+    - Micro-ajustement de la colorimétrie et ajout de grain
     """
     width, height = img.size
     
-    # 1. Micro rotation
-    angle = random.uniform(-0.5, 0.5)
+    # 1. Micro rotation (plus marquée pour casser les lignes de fond)
+    angle = random.uniform(-1.8, 1.8)
     # Faire la rotation sans étendre l'image (on va masquer les coins via le zoom suivant)
     img = img.rotate(angle, resample=Image.Resampling.BILINEAR, expand=False)
     
-    # 2. Micro Zoom / Recadrage (pour éliminer tout coin noir créé par la rotation et décaler les pixels)
-    zoom_factor = random.uniform(1.025, 1.045) # Zoom de 2.5% à 4.5%
+    # 2. Zoom / Recadrage (plus large pour décaler le décor de fond)
+    zoom_factor = random.uniform(1.04, 1.09) # Zoom de 4% à 9%
     new_w = int(width / zoom_factor)
     new_h = int(height / zoom_factor)
     
-    # Décalage aléatoire infime du centre pour le recadrage (1-3 pixels)
-    center_x_offset = random.randint(-2, 2)
-    center_y_offset = random.randint(-2, 2)
+    # Décalage aléatoire du centre pour le recadrage (jusqu'à 15 pixels)
+    # Cela change la position relative des objets dans le décor (porte, miroir, etc.)
+    center_x_offset = random.randint(-15, 15)
+    center_y_offset = random.randint(-15, 15)
     
-    left = max(0, ((width - new_w) // 2) + center_x_offset)
-    top = max(0, ((height - new_h) // 2) + center_y_offset)
-    right = min(width, left + new_w)
-    bottom = min(height, top + new_h)
+    left = max(0, min(width - new_w, ((width - new_w) // 2) + center_x_offset))
+    top = max(0, min(height - new_h, ((height - new_h) // 2) + center_y_offset))
+    right = left + new_w
+    bottom = top + new_h
     
     img = img.crop((left, top, right, bottom))
     
     # Ramener aux dimensions d'origine avec interpolation de haute qualité
     img = img.resize((width, height), resample=Image.Resampling.LANCZOS)
     
-    # 3. Micro variations visuelles (lum/contraste imperceptibles mais changent les hashs des pixels)
-    if random.random() > 0.3:
+    # 3. Micro variations visuelles (changent les hashs des pixels)
+    if random.random() > 0.2:
         enhancer = ImageEnhance.Brightness(img)
-        img = enhancer.enhance(random.uniform(0.98, 1.02))
-    if random.random() > 0.3:
+        img = enhancer.enhance(random.uniform(0.97, 1.03))
+    if random.random() > 0.2:
         enhancer = ImageEnhance.Contrast(img)
-        img = enhancer.enhance(random.uniform(0.98, 1.02))
+        img = enhancer.enhance(random.uniform(0.97, 1.03))
+    if random.random() > 0.2:
+        enhancer = ImageEnhance.Color(img) # Saturation
+        img = enhancer.enhance(random.uniform(0.95, 1.05))
         
+    # 4. Ajout d'un grain numérique (Noise) imperceptible pour briser les hashs visuels
+    # Transforme en numpy array, ajoute du bruit, et repasse en PIL
+    data = np.array(img).astype(np.float32)
+    noise = np.random.normal(0, 0.5, data.shape).astype(np.float32)
+    data = np.clip(data + noise, 0, 255).astype(np.uint8)
+    img = Image.fromarray(data)
+    
     return img
 
 def humanize_image(input_path: str, output_path: str, apply_transform: bool = True) -> bool:
