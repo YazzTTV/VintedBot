@@ -5,7 +5,7 @@ import Link from "next/link"
 import {
   TrendingUp,
   TrendingDown,
-  PackageOpen,
+  CreditCard,
   Euro,
   ShoppingBag,
   ArrowUpRight,
@@ -88,6 +88,13 @@ export default function Dashboard() {
           positive={true}
         />
         <KPICard 
+          title="Dépenses Commandes" 
+          value={loading ? "..." : `${Number(stats?.totalExpenses || 0).toFixed(2)} €`}
+          trend="Total des achats" 
+          icon={CreditCard}
+          positive={false}
+        />
+        <KPICard 
           title="Bénéfice Net" 
           value={loading ? "..." : `${Number(stats?.beneficeTotal || 0).toFixed(2)} €`}
           trend={loading ? "" : "+ En direct"}
@@ -97,16 +104,9 @@ export default function Dashboard() {
         <KPICard 
           title="Marge Moyenne" 
           value={loading ? "..." : `${Number(stats?.margeMoyenne || 0).toFixed(1)} %`}
-          trend={null}
+          trend="Moyenne par vente"
           icon={TrendingDown}
           positive={true}
-        />
-        <KPICard 
-          title="Articles en Stock" 
-          value={loading ? "..." : String(stats?.articlesEnStock || 0)}
-          trend="Actuels" 
-          icon={PackageOpen}
-          positive={null}
         />
         <KPICard 
           title="Vinted Disponible" 

@@ -25,11 +25,18 @@ const ACCOUNT_COLORS: Record<string, { bg: string, text: string, border: string,
   nina: { bg: "bg-cyan-500/10", text: "text-cyan-400", border: "border-cyan-500/20", glow: "shadow-[0_0_8px_rgba(6,182,212,0.2)]" },
   orane: { bg: "bg-amber-500/10", text: "text-amber-400", border: "border-amber-500/20", glow: "shadow-[0_0_8px_rgba(245,158,11,0.2)]" },
   emma: { bg: "bg-rose-500/10", text: "text-rose-400", border: "border-rose-500/20", glow: "shadow-[0_0_8px_rgba(244,63,94,0.2)]" },
+  yazz: { bg: "bg-indigo-500/10", text: "text-indigo-400", border: "border-indigo-500/20", glow: "shadow-[0_0_8px_rgba(99,102,241,0.2)]" },
+  dressingdantan: { bg: "bg-orange-500/10", text: "text-orange-400", border: "border-orange-500/20", glow: "shadow-[0_0_8px_rgba(249,115,22,0.2)]" },
 }
 
 const getAccountStyle = (name: string) => {
   const cleanName = name.toLowerCase()
-  return ACCOUNT_COLORS[cleanName] || { bg: "bg-zinc-800", text: "text-zinc-400", border: "border-zinc-700", glow: "" }
+  if (ACCOUNT_COLORS[cleanName]) return ACCOUNT_COLORS[cleanName]
+  
+  const matchingKey = Object.keys(ACCOUNT_COLORS).find(key => 
+    cleanName.includes(key) || key.includes(cleanName)
+  )
+  return ACCOUNT_COLORS[matchingKey || ""] || { bg: "bg-zinc-800", text: "text-zinc-400", border: "border-zinc-700", glow: "" }
 }
 
 export default function InboxPage() {
@@ -442,38 +449,60 @@ export default function InboxPage() {
                     Début de la discussion avec @{activeConv.buyerUsername}
                   </div>
                 ) : (
-                  activeConv.messages.map((msg: any) => {
+                  activeConv.messages.map((msg: any, index: number) => {
                     const isMe = msg.senderUsername.toLowerCase() !== activeConv.buyerUsername.toLowerCase()
                     const msgTime = new Date(msg.createdAtVinted).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})
 
-                    return (
-                      <div 
-                        key={msg.id} 
-                        className={cn(
-                          "flex flex-col max-w-[75%] animate-in fade-in duration-200",
-                          isMe ? "ml-auto items-end" : "items-start"
-                        )}
-                      >
-                        {/* Expéditeur Label */}
-                        <span className="text-[10px] text-zinc-500 mb-1 font-semibold tracking-wide uppercase px-1">
-                          {isMe ? `Moi (${activeConv.botAccount.name})` : msg.senderUsername}
-                        </span>
-                        
-                        {/* Bulle de Message */}
-                        <div className={cn(
-                          "px-4 py-3 rounded-2xl text-sm leading-relaxed relative break-words whitespace-pre-line w-full border",
-                          isMe 
-                            ? `${getAccountStyle(activeConv.botAccount.name).bg} text-zinc-100 ${getAccountStyle(activeConv.botAccount.name).border} rounded-tr-sm ${getAccountStyle(activeConv.botAccount.name).glow}` 
-                            : "bg-zinc-900/90 text-zinc-100 border-zinc-800 rounded-tl-sm shadow-black/20"
-                        )}>
-                          {msg.content}
-                        </div>
+                    const currentMessageDate = new Date(msg.createdAtVinted).toLocaleDateString('fr-FR', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: '2-digit'
+                    })
+                    const prevMsg = index > 0 ? activeConv.messages[index - 1] : null
+                    const prevMessageDate = prevMsg ? new Date(prevMsg.createdAtVinted).toLocaleDateString('fr-FR', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: '2-digit'
+                    }) : null
+                    
+                    const showDateSeparator = !prevMessageDate || currentMessageDate !== prevMessageDate
 
-                        {/* Heure */}
-                        <span className="text-[9px] text-zinc-600 font-mono mt-1 px-1">
-                          {msgTime}
-                        </span>
-                      </div>
+                    return (
+                      <React.Fragment key={msg.id}>
+                        {showDateSeparator && (
+                          <div className="flex justify-center w-full py-2">
+                            <span className="px-3 py-1 rounded-full bg-zinc-900/80 border border-zinc-800/60 text-[10px] font-bold text-zinc-500 shadow-sm backdrop-blur-sm">
+                              {currentMessageDate}
+                            </span>
+                          </div>
+                        )}
+                        <div 
+                          className={cn(
+                            "flex flex-col max-w-[75%] animate-in fade-in duration-200",
+                            isMe ? "ml-auto items-end" : "items-start"
+                          )}
+                        >
+                          {/* Expéditeur Label */}
+                          <span className="text-[10px] text-zinc-500 mb-1 font-semibold tracking-wide uppercase px-1">
+                            {isMe ? `Moi (${activeConv.botAccount.name})` : msg.senderUsername}
+                          </span>
+                          
+                          {/* Bulle de Message */}
+                          <div className={cn(
+                            "px-4 py-3 rounded-2xl text-sm leading-relaxed relative break-words whitespace-pre-line w-full border",
+                            isMe 
+                              ? `${getAccountStyle(activeConv.botAccount.name).bg} text-zinc-100 ${getAccountStyle(activeConv.botAccount.name).border} rounded-tr-sm ${getAccountStyle(activeConv.botAccount.name).glow}` 
+                              : "bg-zinc-900/90 text-zinc-100 border-zinc-800 rounded-tl-sm shadow-black/20"
+                          )}>
+                            {msg.content}
+                          </div>
+
+                          {/* Heure */}
+                          <span className="text-[9px] text-zinc-600 font-mono mt-1 px-1">
+                            {msgTime}
+                          </span>
+                        </div>
+                      </React.Fragment>
                     )
                   })
                 )}

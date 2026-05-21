@@ -166,10 +166,9 @@ Nouveau colis à préparer !
 🚚 *Transporteur :* ${transporteur}
 ${numeroBordereau ? `🔢 *N° Bordereau :* ${numeroBordereau}\n` : ''}📅 *Vendu le :* ${dateStr}
 
-📄 *Bordereau à imprimer :*
+${itemPhoto ? `🖼️ *Photo du produit :*\n${itemPhoto}\n\n` : ''}📄 *Bordereau à imprimer :*
 ${bordereauUrl}
 
-${itemPhoto ? `🖼️ *Photo du produit :*\n${itemPhoto}\n` : ''}
 Merci ! 💪`
 
     const whatsappUrl = `https://wa.me/${NOAH_WHATSAPP_NUMBER}?text=${encodeURIComponent(message)}`

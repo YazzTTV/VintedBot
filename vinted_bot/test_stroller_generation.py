@@ -11,12 +11,19 @@ def run_test():
     print("=== TEST GÉNÉRATION DE POUSSETTES ===")
     
     # 1. Image source de test
-    archive_dir = r"D:\AntiGravity\02 Projects\Business Vinted\Accounts\nina\Products_Archive\shein_quickship_1778267272_1_Robe noire flui"
-    src_img = os.path.join(archive_dir, "original_shein_quickship_1778267272_1.png")
+    input_dir = r"D:\AntiGravity\02 Projects\Business Vinted\Accounts\orane\Input_Screenshots"
+    stroller_images = [f for f in os.listdir(input_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))] if os.path.exists(input_dir) else []
     
-    if not os.path.exists(src_img):
-        print(f"[Test] [ERROR] Image source de test introuvable : {src_img}")
-        return
+    if stroller_images:
+        src_img = os.path.join(input_dir, stroller_images[0])
+        print(f"[Test] Image de poussette réelle trouvée : {src_img}")
+    else:
+        archive_dir = r"D:\AntiGravity\02 Projects\Business Vinted\Accounts\nina\Products_Archive\shein_quickship_1778267272_1_Robe noire flui"
+        src_img = os.path.join(archive_dir, "original_shein_quickship_1778267272_1.png")
+        if not os.path.exists(src_img):
+            print(f"[Test] [ERROR] Image source de test introuvable : {src_img}")
+            return
+        print(f"[Test] Aucune poussette réelle. Fallback sur l'image robe : {src_img}")
         
     test_input = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_stroller_input.png")
     shutil.copy2(src_img, test_input)

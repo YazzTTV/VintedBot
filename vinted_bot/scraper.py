@@ -65,7 +65,7 @@ async def dismiss_popups(page):
     except Exception as e:
         print(f"[Scraper] Note popups : {e}")
 
-async def scrape_products(count: int, url: str, output_dir: str, archive_dir: str):
+async def scrape_products(count: int, url: str, output_dir: str, archive_dir: str, niche: str = "garment"):
     os.makedirs(output_dir, exist_ok=True)
     
     if not start_edge():
@@ -282,18 +282,24 @@ async def scrape_products(count: int, url: str, output_dir: str, archive_dir: st
                     if product_url_base in history_urls:
                         continue
                         
-                    # --- Filtre strict de catégories (Focus Robes/Jupes & Exclusion Maillots de bain) ---
+                    # --- Filtre strict de catégories selon la niche ---
                     product_url_lower = product_url.lower()
                     
-                    # Éliminer absolument les maillots de bain, bikini, beachwear, bodysuits qui bloquent la modération GPT
-                    exclusion_words = ["swim", "bikini", "maillot", "beachwear", "bodysuit", "romper", "jumpsuit"]
-                    if any(word in product_url_lower for word in exclusion_words):
-                        continue
-                        
-                    # S'assurer qu'il s'agit bien d'une robe (dress/robe) ou d'une jupe (skirt/jupe)
-                    inclusion_words = ["dress", "robe", "skirt", "jupe"]
-                    if not any(word in product_url_lower for word in inclusion_words):
-                        continue
+                    if niche == "stroller":
+                        # Pour les poussettes : s'assurer qu'on reste sur la thématique pet stroller/hondenbuggy/poussette
+                        inclusion_words = ["stroller", "poussette", "buggy", "hondenbuggy", "pet", "chien", "dog"]
+                        if not any(word in product_url_lower for word in inclusion_words):
+                            continue
+                    else:
+                        # Éliminer absolument les maillots de bain, bikini, beachwear, bodysuits qui bloquent la modération GPT
+                        exclusion_words = ["swim", "bikini", "maillot", "beachwear", "bodysuit", "romper", "jumpsuit"]
+                        if any(word in product_url_lower for word in exclusion_words):
+                            continue
+                            
+                        # S'assurer qu'il s'agit bien d'une robe (dress/robe) ou d'une jupe (skirt/jupe)
+                        inclusion_words = ["dress", "robe", "skirt", "jupe"]
+                        if not any(word in product_url_lower for word in inclusion_words):
+                            continue
                         
                     # Trouver l'image principale de cette carte
                     img_el = None
@@ -435,14 +441,20 @@ if __name__ == "__main__":
     # Récupération de la configuration du compte
     config = get_account_config(args.account)
     
+    # URL par défaut adaptée selon la niche
+    start_url = args.url
+    if args.url == "https://fr.shein.com/Women-Dresses-c-1727.html?tag_ids=quickship&price_max=15" and config.niche == "stroller":
+        start_url = "https://fr.shein.com/sr/?q=poussette+pour+chien&tag_ids=quickship&price_max=60"
+        
     final_output_dir = args.output_dir if args.output_dir else config.input_dir
     
     print("="*50)
     print(f"DEMARRAGE DU SCRAPER SHEIN [COMPTE : {config.name.upper()}]")
     print(f"Quantite cible : {args.count}")
-    print(f"URL de depart  : {args.url}")
+    print(f"URL de depart  : {start_url}")
     print(f"Dossier de sortie : {final_output_dir}")
     print(f"Dossier archive   : {config.archive_dir}")
+    print(f"Niche              : {config.niche.upper()}")
     print("="*50 + "\n")
     
-    asyncio.run(scrape_products(args.count, args.url, final_output_dir, config.archive_dir))
+    asyncio.run(scrape_products(args.count, start_url, final_output_dir, config.archive_dir, config.niche))

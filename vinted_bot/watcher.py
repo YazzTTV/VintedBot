@@ -11,7 +11,7 @@ load_dotenv() # Charge l'éventuel webhook url depuis .env
 
 from processor import analyze_screenshot
 from image_generator import generate_selfie, generate_flat_lay, generate_stroller_domestic, generate_stroller_with_dog
-from chatgpt_upscaler import upscale_image_with_chatgpt
+from chatgpt_upscaler import upscale_image_with_chatgpt, generate_profile_with_chatgpt, generate_hanger_with_chatgpt
 from config_manager import get_account_config
 from humanizer import humanize_image
 import argparse
@@ -146,8 +146,7 @@ class ScreenshotHandler(FileSystemEventHandler):
         # Copie de l'image originale pour archivage
         shutil.copy2(file_path, os.path.join(product_dir, f"original_{filename}"))
         
-        # Détection de la niche (poussettes vs vêtements)
-        is_stroller = (self.config.niche == "stroller")
+        # Détection de la niche        is_stroller = (self.config.niche == "stroller")
         
         # 2. Generation de la première image (selfie ou poussette domestique)
         output_image_path = os.path.join(product_dir, "selfie.jpg")
@@ -157,6 +156,7 @@ class ScreenshotHandler(FileSystemEventHandler):
             selfie_success = generate_selfie(prompt, file_path, output_image_path, self.config.avatar_path)
         
         selfie_upscaled_path = None
+        profile_upscaled_path = None
         if selfie_success:
             print(f"[Watcher] [OK] Première image générée.")
             # 3. Upscaling de la première image via ChatGPT
@@ -165,6 +165,16 @@ class ScreenshotHandler(FileSystemEventHandler):
             if upscale_image_with_chatgpt(output_image_path, upscaled_path):
                 print(f"[Watcher] [OK] Première image upscalée avec succès.")
                 selfie_upscaled_path = upscaled_path
+                
+                # Génération de l'image de profil ChatGPT (uniquement si ce n'est pas une poussette)
+                if not is_stroller:
+                    print(f"[Watcher] Lancement de la génération de l'image de profil ChatGPT...")
+                    profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
+                    if generate_profile_with_chatgpt(upscaled_path, profile_path):
+                        print(f"[Watcher] [OK] Image de profil générée avec succès.")
+                        profile_upscaled_path = profile_path
+                    else:
+                        print(f"[Watcher] [WARN] Echec de la génération de l'image de profil.")
             else:
                 print(f"[Watcher] [WARN] Echec de l'upscaling de la première image.")
         else:
@@ -191,8 +201,27 @@ class ScreenshotHandler(FileSystemEventHandler):
         else:
             print(f"[Watcher] [ERROR] Echec de la generation de la deuxième image.")
             
+        # 3b. Generation de la quatrième image (Image sur cintre via ChatGPT, uniquement si vêtement)
+        hanger_upscaled_path = None
+        if not is_stroller:
+            print(f"[Watcher] Lancement de la génération de l'image sur cintre ChatGPT...")
+            hanger_path = os.path.join(product_dir, "hanger_upscaled.jpg")
+            if generate_hanger_with_chatgpt(file_path, self.config.hanger_template_path, hanger_path):
+                print(f"[Watcher] [OK] Image sur cintre générée avec succès.")
+                hanger_upscaled_path = hanger_path
+            else:
+                print(f"[Watcher] [WARN] Echec de la génération de l'image sur cintre.")
+            
+        # Validation de la présence de toutes les images requises pour le type d'annonce
+        if is_stroller:
+            all_images_ok = (selfie_upscaled_path is not None) and (flat_lay_upscaled_path is not None)
+            required_desc = "selfie upscalé et flat lay upscalé"
+        else:
+            all_images_ok = (selfie_upscaled_path is not None) and (profile_upscaled_path is not None) and (flat_lay_upscaled_path is not None) and (hanger_upscaled_path is not None)
+            required_desc = "selfie upscalé, image de profil, flat lay upscalé, et image sur cintre"
+            
         # 4. Copie finale synchronisee vers la racine de OUTPUT_DIR pour declencher MacroDroid
-        if selfie_upscaled_path or flat_lay_upscaled_path:
+        if all_images_ok:
             # Nettoyage préalable de OUTPUT_DIR pour éviter les doublons sur le téléphone
             try:
                 for item in os.listdir(self.config.output_dir):
@@ -202,7 +231,7 @@ class ScreenshotHandler(FileSystemEventHandler):
                 print(f"[Watcher] Nettoyage préalable réussi : ancienne annonce supprimée de {os.path.basename(self.config.output_dir)}.")
             except Exception as clean_err:
                 print(f"[Watcher] Note nettoyage : {clean_err}")
-
+ 
             with open(os.path.join(self.config.output_dir, "titre.txt"), "w", encoding="utf-8") as f:
                 f.write(titre)
             with open(os.path.join(self.config.output_dir, "description.txt"), "w", encoding="utf-8") as f:
@@ -211,9 +240,15 @@ class ScreenshotHandler(FileSystemEventHandler):
             if selfie_upscaled_path:
                 # On applique l'humanisation visuelle géométrique complète lors de l'export vers le téléphone
                 humanize_image(selfie_upscaled_path, os.path.join(self.config.output_dir, "selfie_upscaled.jpg"), apply_transform=True)
+            if profile_upscaled_path:
+                humanize_image(profile_upscaled_path, os.path.join(self.config.output_dir, "profile_upscaled.jpg"), apply_transform=True)
             if flat_lay_upscaled_path:
                 humanize_image(flat_lay_upscaled_path, os.path.join(self.config.output_dir, "flat_lay_upscaled.jpg"), apply_transform=True)
+            if hanger_upscaled_path:
+                humanize_image(hanger_upscaled_path, os.path.join(self.config.output_dir, "hanger_upscaled.jpg"), apply_transform=True)
             print(f"[Watcher] [OK] Tous les fichiers ont été HUMANISÉS et déposés dans {self.config.output_dir}.")
+        else:
+            print(f"[Watcher] [ERROR] Export annulé pour MacroDroid car des images requises sont manquantes ({required_desc}).")
             
         # 4. Nettoyage automatique du dossier Input_Screenshots
         try:
@@ -231,15 +266,16 @@ def start_watcher(account_name="nina"):
     
     file_queue = queue.Queue()
     event_handler = ScreenshotHandler(file_queue, config)
+    
     observer = Observer()
     observer.schedule(event_handler, config.input_dir, recursive=False)
     observer.start()
     
-    print(f"\n" + "="*50)
-    print(f"[WATCHER] DEMARRE ET ACTIF [COMPTE : {config.name.upper()}]")
-    print(f"Dossier ecoute : {config.input_dir}")
-    print(f"File d'attente active : deposez vos images en vrac !")
-    print(f"="*50 + "\n")
+    print(f"\n" + "="*50, flush=True)
+    print(f"[WATCHER] DEMARRE ET ACTIF [COMPTE : {config.name.upper()}]", flush=True)
+    print(f"Dossier ecoute : {config.input_dir}", flush=True)
+    print(f"File d'attente active : deposez vos images en vrac !", flush=True)
+    print(f"="*50 + "\n", flush=True)
     
     try:
         while True:

@@ -40,7 +40,7 @@ def process_and_copy(folder_name):
     # 1. Nettoyage préventif
     clean_output_dir()
 
-    # 2. Identification des images (Selfie et Flat Lay)
+    # 2. Identification des images (Selfie, Profile, Flat Lay, et Hanger)
     # On cherche les versions upscalées en priorité
     selfie_src = None
     for cand in ["selfie_upscaled.jpg", "selfie.jpg"]:
@@ -49,14 +49,28 @@ def process_and_copy(folder_name):
             selfie_src = p
             break
             
+    profile_src = None
+    for cand in ["profile_upscaled.jpg", "profile.jpg"]:
+        p = os.path.join(source_dir, cand)
+        if os.path.exists(p):
+            profile_src = p
+            break
+
     flat_lay_src = None
     for cand in ["flat_lay_upscaled.jpg", "flat_lay.jpg"]:
         p = os.path.join(source_dir, cand)
         if os.path.exists(p):
             flat_lay_src = p
             break
+            
+    hanger_src = None
+    for cand in ["hanger_upscaled.jpg", "hanger.jpg"]:
+        p = os.path.join(source_dir, cand)
+        if os.path.exists(p):
+            hanger_src = p
+            break
     
-    if not selfie_src and not flat_lay_src:
+    if not selfie_src and not flat_lay_src and not profile_src and not hanger_src:
         print(f"[Restorer] [ERROR] Aucune image trouvée dans {folder_name}")
         return False
 
@@ -66,10 +80,20 @@ def process_and_copy(folder_name):
         if humanize_image(selfie_src, dest_selfie, apply_transform=True):
             print(f"[Restorer] [OK] Selfie humanisé.")
             
+    if profile_src:
+        dest_profile = os.path.join(OUTPUT_DIR, "profile_upscaled.jpg")
+        if humanize_image(profile_src, dest_profile, apply_transform=True):
+            print(f"[Restorer] [OK] Profile humanisé.")
+
     if flat_lay_src:
         dest_flat = os.path.join(OUTPUT_DIR, "flat_lay_upscaled.jpg")
         if humanize_image(flat_lay_src, dest_flat, apply_transform=True):
             print(f"[Restorer] [OK] Flat Lay humanisé.")
+            
+    if hanger_src:
+        dest_hanger = os.path.join(OUTPUT_DIR, "hanger_upscaled.jpg")
+        if humanize_image(hanger_src, dest_hanger, apply_transform=True):
+            print(f"[Restorer] [OK] Hanger humanisé.")
 
     # 4. Copie des textes
     for txt_file in ["titre.txt", "description.txt"]:

@@ -65,6 +65,27 @@ export default function ExpeditionsPage() {
     }
   }
 
+  const handleAddTestSale = () => {
+    const testSale = {
+      id: `test-sale-${Date.now()}`,
+      pseudoAcheteur: "ClientTest",
+      dateVente: new Date().toISOString(),
+      dateLimiteExpedition: new Date(Date.now() + 3 * 24 * 3600 * 1000).toISOString(),
+      photoUrl: "https://images.unsplash.com/photo-1542291026-7eec264c27ff?auto=format&fit=crop&w=300&q=80",
+      extensionStatut: "AUCUNE",
+      isTest: true,
+      botAccount: { name: "test-bot" },
+      article: {
+        id: "test-art-12345",
+        nom: "Poussette Test Premium",
+        commande: {
+          fournisseur: "TEMU"
+        }
+      }
+    }
+    setSales(prev => [testSale, ...prev] as any)
+  }
+
   // Soumission de l'upload vers Supabase
   const handleDispatchSubmit = async (saleId: string) => {
     const file = selectedFiles[saleId]
@@ -77,6 +98,41 @@ export default function ExpeditionsPage() {
     }
 
     setProcessingIds(prev => ({ ...prev, [saleId]: true }))
+
+    if (saleId.startsWith('test-sale-')) {
+      setTimeout(() => {
+        const fakeBordereauUrl = "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+        const sale = sales.find((s: any) => s.id === saleId) as any
+        const dateStr = new Date(sale.dateVente).toLocaleDateString('fr-FR')
+        const itemPhoto = sale.photoUrl || ""
+        
+        const message = `Salut Noah ! 📦
+[TEST] Nouveau colis à préparer !
+
+👤 *Acheteur :* ${sale.pseudoAcheteur}
+🤖 *Compte :* ${sale.botAccount?.name?.toUpperCase() || 'N/A'}
+🚚 *Transporteur :* ${transporteur}
+${numeroBordereau ? `🔢 *N° Bordereau :* ${numeroBordereau}\n` : ''}📅 *Vendu le :* ${dateStr}
+
+${itemPhoto ? `🖼️ *Photo du produit :*\n${itemPhoto}\n\n` : ''}📄 *Bordereau à imprimer :*
+${fakeBordereauUrl}
+
+Merci ! 💪`
+
+        const whatsappUrl = `https://wa.me/33783642205?text=${encodeURIComponent(message)}`
+        
+        setSuccessData(prev => ({ 
+          ...prev, 
+          [saleId]: { 
+            expedition: { id: "fake-exp", transporteur, bordereauUrl: fakeBordereauUrl },
+            whatsappUrl,
+            bordereauUrl: fakeBordereauUrl
+          } 
+        }))
+        setProcessingIds(prev => ({ ...prev, [saleId]: false }))
+      }, 1000)
+      return
+    }
 
     try {
       // Construction du multipart FormData
@@ -119,9 +175,18 @@ export default function ExpeditionsPage() {
           <p className="text-zinc-400 mt-1 text-sm">Préparez les colis et générez les bordereaux Supabase pour Noah.</p>
         </div>
 
-        <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2 flex items-center gap-3">
-          <div className="w-3 h-3 rounded-full bg-amber-500 animate-pulse"></div>
-          <span className="text-sm font-bold text-zinc-200">{sales.length} colis en attente</span>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={handleAddTestSale}
+            className="bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white hover:bg-zinc-800/80 px-4 py-2 rounded-xl text-sm font-bold transition-all flex items-center gap-2 active:scale-98"
+          >
+            🧪 Injecter Colis Test
+          </button>
+          
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2 flex items-center gap-3">
+            <div className="w-3 h-3 rounded-full bg-amber-500 animate-pulse"></div>
+            <span className="text-sm font-bold text-zinc-200">{sales.length} colis en attente</span>
+          </div>
         </div>
       </header>
 

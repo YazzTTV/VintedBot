@@ -4,7 +4,7 @@ import prisma from '@/lib/prisma'
 export async function GET() {
   try {
     // Parallel metrics fetching for performance
-    const [aggregateSales, stockCount, last7DaysVentes, realAlerts, botStats, botList] = await Promise.all([
+    const [aggregateSales, aggregateExpenses, stockCount, last7DaysVentes, realAlerts, botStats, botList] = await Promise.all([
       // 1. Global Sales Statistics
       prisma.vente.aggregate({
         _sum: {
@@ -15,11 +15,17 @@ export async function GET() {
           margePct: true
         }
       }),
-      // 2. Live Items still in supply
+      // 2. Global Supplier Expenses (prixTotal of all orders)
+      prisma.commandeFournisseur.aggregate({
+        _sum: {
+          prixTotal: true
+        }
+      }),
+      // 3. Live Items still in supply
       prisma.article.count({
         where: { statut: 'STOCK' }
       }),
-      // 3. Dynamic time series data for the UI charts
+      // 4. Dynamic time series data for the UI charts
       prisma.vente.findMany({
         take: 100, // fetch last 100 sales to group
         orderBy: { dateVente: 'desc' },
@@ -29,21 +35,21 @@ export async function GET() {
           beneficeNet: true
         }
       }),
-      // 4. Fetch real shipping alerts (Pending sales)
+      // 5. Fetch real shipping alerts (Pending sales)
       prisma.vente.findMany({
         where: { statut: 'EN_ATTENTE' },
         take: 5, // Just need top urgent ones for dash
         orderBy: { dateLimiteExpedition: 'asc' },
         include: { article: true }
       }),
-      // 5. Aggregated Real Bot Balances (Supabase real sync)
+      // 6. Aggregated Real Bot Balances (Supabase real sync)
       prisma.botAccount.aggregate({
         _sum: {
           balancePending: true,
           balanceAvailable: true
         }
       }),
-      // 6. Individual list of Bots for the detailed grid
+      // 7. Individual list of Bots for the detailed grid
       prisma.botAccount.findMany({
         orderBy: { name: 'asc' }
       })
@@ -120,6 +126,7 @@ export async function GET() {
         beneficeTotal: Number(aggregateSales._sum.beneficeNet || 0),
         margeMoyenne: Number(aggregateSales._avg.margePct || 0),
         articlesEnStock: stockCount,
+        totalExpenses: Number(aggregateExpenses._sum.prixTotal || 0),
         chartData: chartData,
         alertesExpeditions: alertesExpeditions,
         

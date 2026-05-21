@@ -18,6 +18,7 @@ class AccountConfig:
         # Fichiers de données spécifiques
         self.avatar_path = os.path.join(self.account_dir, "avatar.jpg")
         self.floor_template_path = os.path.join(self.account_dir, "floor_template.jpg")
+        self.hanger_template_path = os.path.join(self.account_dir, "hanger_template.jpg")
         self.history_path = os.path.join(self.account_dir, "Sourcing_History.md")
         
         # Chargement d'éventuelles propriétés customisées depuis settings.json
@@ -58,6 +59,12 @@ class AccountConfig:
         if not os.path.exists(self.floor_template_path) and os.path.exists(default_floor):
             import shutil
             shutil.copy2(default_floor, self.floor_template_path)
+            
+        # Pareil pour hanger template
+        default_hanger = os.path.join(BOT_DIR, "hanger_template.jpg")
+        if not os.path.exists(self.hanger_template_path) and os.path.exists(default_hanger):
+            import shutil
+            shutil.copy2(default_hanger, self.hanger_template_path)
             
         # Initialiser settings.json si manquant
         if not os.path.exists(self.settings_path):
