@@ -10,11 +10,139 @@ from watchdog.events import FileSystemEventHandler
 load_dotenv() # Charge l'éventuel webhook url depuis .env
 
 from processor import analyze_screenshot
-from image_generator import generate_selfie, generate_flat_lay, generate_stroller_domestic, generate_stroller_with_dog
-from chatgpt_upscaler import upscale_image_with_chatgpt, generate_profile_with_chatgpt, generate_hanger_with_chatgpt
 from config_manager import get_account_config
 from humanizer import humanize_image
 import argparse
+import json
+
+class SimpleFileLock:
+    def __init__(self, lock_file):
+        self.lock_file = lock_file
+        self.fd = None
+
+    def acquire(self):
+        while True:
+            try:
+                self.fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                break
+            except FileExistsError:
+                time.sleep(1)
+            except Exception as e:
+                # Sécurité pour autres erreurs OS (permission, etc.)
+                print(f"[Watcher] [LOCK] Warning: {e}")
+                time.sleep(1)
+
+    def release(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            try:
+                os.remove(self.lock_file)
+            except OSError:
+                pass
+            self.fd = None
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.release()
+
+def load_post_state(state_file):
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Valeurs par défaut si le fichier n'existe pas ou est corrompu
+    return {"last_post_type": "fake", "last_fake_index": -1}
+
+def save_post_state(state_file, last_post_type, last_fake_index):
+    try:
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "last_post_type": last_post_type,
+                "last_fake_index": last_fake_index
+            }, f, indent=2)
+    except Exception as e:
+        print(f"[Watcher] [Alternance] [WARN] Impossible de sauvegarder l'etat : {e}")
+
+def get_fake_items(fake_bank_dir):
+    if not os.path.exists(fake_bank_dir):
+        return []
+    items = []
+    for d in os.listdir(fake_bank_dir):
+        path = os.path.join(fake_bank_dir, d)
+        if os.path.isdir(path) and d.startswith("item_"):
+            items.append(path)
+    items.sort()
+    return items
+
+def get_next_fake_item(fake_bank_dir, last_fake_index):
+    items = get_fake_items(fake_bank_dir)
+    if not items:
+        return None, -1
+    next_index = (last_fake_index + 1) % len(items)
+    return items[next_index], next_index
+
+def export_fake_item(fake_item_dir, output_dir):
+    """
+    Exporte un item fake vers le dossier de sortie pour MacroDroid.
+    Nettoie le dossier, écrit le titre, la description, et humanise les photos.
+    """
+    try:
+        for item in os.listdir(output_dir):
+            item_path = os.path.join(output_dir, item)
+            if os.path.isfile(item_path):
+                os.remove(item_path)
+        print(f"[Watcher] [Alternance] Nettoyage de {os.path.basename(output_dir)} reussi.")
+    except Exception as clean_err:
+        print(f"[Watcher] [Alternance] [WARN] Echec nettoyage : {clean_err}")
+
+    try:
+        shutil.copy2(os.path.join(fake_item_dir, "titre.txt"), os.path.join(output_dir, "titre.txt"))
+        shutil.copy2(os.path.join(fake_item_dir, "description.txt"), os.path.join(output_dir, "description.txt"))
+    except Exception as e:
+        print(f"[Watcher] [Alternance] [ERROR] Echec copie textes du fake : {e}")
+        return False
+
+    images = [f for f in os.listdir(fake_item_dir) if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
+    images.sort()
+    
+    if not images:
+        print(f"[Watcher] [Alternance] [ERROR] Aucune image trouvee dans {fake_item_dir}")
+        return False
+        
+    dest_names = ["selfie_upscaled.jpg", "flat_lay_upscaled.jpg", "profile_upscaled.jpg", "hanger_upscaled.jpg"]
+    
+    copied_count = 0
+    for idx, img_name in enumerate(images):
+        if idx >= len(dest_names):
+            break
+        src_img = os.path.join(fake_item_dir, img_name)
+        dest_img = os.path.join(output_dir, dest_names[idx])
+        
+        try:
+            humanize_image(src_img, dest_img, apply_transform=True)
+            copied_count += 1
+        except Exception as e:
+            print(f"[Watcher] [Alternance] [WARN] Echec humanisation image {img_name} : {e}")
+            try:
+                shutil.copy2(src_img, dest_img)
+                copied_count += 1
+            except Exception:
+                pass
+                
+    print(f"[Watcher] [Alternance] [OK] {copied_count} image(s) fakes exportees et humanisees.")
+    return True
+
+def countdown_wait(seconds: int):
+    """Affiche un compte a rebours interactif dans la console."""
+    for i in range(seconds, 0, -1):
+        print(f"\r[Watcher] [Alternance] Annonce FAKE exportee. Attente de {seconds} secondes avant de poster l'annonce IA... ({i}s restantes)", end="", flush=True)
+        time.sleep(1)
+    print("\r" + " " * 120 + "\r", end="", flush=True)
 
 def sync_to_google_sheets(account: str, titre: str, url: str, fiche: str):
     """Envoie la nouvelle annonce en temps réel vers le webhook Google Sheet."""
@@ -54,11 +182,13 @@ def sync_to_vinted_manager_supabase():
         pass
 
 class ScreenshotHandler(FileSystemEventHandler):
-    def __init__(self, file_queue, config):
+    def __init__(self, file_queue, config, publish=False, submit=False):
         super().__init__()
         self.processed_files = set()
         self.file_queue = file_queue
         self.config = config
+        self.publish = publish
+        self.submit = submit
 
     def on_created(self, event):
         if event.is_directory:
@@ -146,71 +276,40 @@ class ScreenshotHandler(FileSystemEventHandler):
         # Copie de l'image originale pour archivage
         shutil.copy2(file_path, os.path.join(product_dir, f"original_{filename}"))
         
-        # Détection de la niche        is_stroller = (self.config.niche == "stroller")
-        
-        # 2. Generation de la première image (selfie ou poussette domestique)
-        output_image_path = os.path.join(product_dir, "selfie.jpg")
-        if is_stroller:
-            selfie_success = generate_stroller_domestic(prompt, file_path, output_image_path)
-        else:
-            selfie_success = generate_selfie(prompt, file_path, output_image_path, self.config.avatar_path)
+        # Détection de la niche
+        is_stroller = (self.config.niche == "stroller")
         
         selfie_upscaled_path = None
         profile_upscaled_path = None
-        if selfie_success:
-            print(f"[Watcher] [OK] Première image générée.")
-            # 3. Upscaling de la première image via ChatGPT
-            print(f"[Watcher] Lancement de l'upscaling ChatGPT pour la première image...")
-            upscaled_path = os.path.join(product_dir, "selfie_upscaled.jpg")
-            if upscale_image_with_chatgpt(output_image_path, upscaled_path):
-                print(f"[Watcher] [OK] Première image upscalée avec succès.")
-                selfie_upscaled_path = upscaled_path
-                
-                # Génération de l'image de profil ChatGPT (uniquement si ce n'est pas une poussette)
-                if not is_stroller:
-                    print(f"[Watcher] Lancement de la génération de l'image de profil ChatGPT...")
-                    profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
-                    if generate_profile_with_chatgpt(upscaled_path, profile_path):
-                        print(f"[Watcher] [OK] Image de profil générée avec succès.")
-                        profile_upscaled_path = profile_path
-                    else:
-                        print(f"[Watcher] [WARN] Echec de la génération de l'image de profil.")
-            else:
-                print(f"[Watcher] [WARN] Echec de l'upscaling de la première image.")
-        else:
-            print(f"[Watcher] [ERROR] Echec de la generation de la première image.")
-            
-        # 3. Generation de la deuxième image (Flat Lay ou poussette avec chien)
-        flat_lay_output_path = os.path.join(product_dir, "flat_lay.jpg")
-        if is_stroller:
-            flat_lay_success = generate_stroller_with_dog(prompt, file_path, flat_lay_output_path)
-        else:
-            flat_lay_success = generate_flat_lay(prompt, file_path, flat_lay_output_path, self.config.floor_template_path)
-        
         flat_lay_upscaled_path = None
-        if flat_lay_success:
-            print(f"[Watcher] [OK] Deuxième image générée.")
-            # Upscaling de la deuxième image via ChatGPT
-            print(f"[Watcher] Lancement de l'upscaling ChatGPT pour la deuxième image...")
-            upscaled_flat_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
-            if upscale_image_with_chatgpt(flat_lay_output_path, upscaled_flat_path):
-                print(f"[Watcher] [OK] Deuxième image upscalée avec succès.")
-                flat_lay_upscaled_path = upscaled_flat_path
-            else:
-                print(f"[Watcher] [WARN] Echec de l'upscaling de la deuxième image.")
-        else:
-            print(f"[Watcher] [ERROR] Echec de la generation de la deuxième image.")
-            
-        # 3b. Generation de la quatrième image (Image sur cintre via ChatGPT, uniquement si vêtement)
         hanger_upscaled_path = None
-        if not is_stroller:
-            print(f"[Watcher] Lancement de la génération de l'image sur cintre ChatGPT...")
-            hanger_path = os.path.join(product_dir, "hanger_upscaled.jpg")
-            if generate_hanger_with_chatgpt(file_path, self.config.hanger_template_path, hanger_path):
-                print(f"[Watcher] [OK] Image sur cintre générée avec succès.")
-                hanger_upscaled_path = hanger_path
-            else:
-                print(f"[Watcher] [WARN] Echec de la génération de l'image sur cintre.")
+        
+        # Lancement de la génération d'images en parallèle via l'orchestrateur asynchrone de ChatGPT
+        import asyncio
+        from chatgpt_upscaler import generate_all_images_parallel_async
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            image_results = loop.run_until_complete(
+                generate_all_images_parallel_async(
+                    self.config.niche,
+                    file_path,
+                    self.config.avatar_path,
+                    self.config.floor_template_path,
+                    self.config.hanger_template_path,
+                    product_dir,
+                    prompt
+                )
+            )
+            selfie_upscaled_path = image_results.get("selfie_upscaled")
+            flat_lay_upscaled_path = image_results.get("flat_lay_upscaled")
+            profile_upscaled_path = image_results.get("profile_upscaled")
+            hanger_upscaled_path = image_results.get("hanger_upscaled")
+        except Exception as async_err:
+            print(f"[Watcher] [ERROR] Échec de la génération d'images en parallèle : {async_err}")
+        finally:
+            loop.close()
             
         # Validation de la présence de toutes les images requises pour le type d'annonce
         if is_stroller:
@@ -222,16 +321,51 @@ class ScreenshotHandler(FileSystemEventHandler):
             
         # 4. Copie finale synchronisee vers la racine de OUTPUT_DIR pour declencher MacroDroid
         if all_images_ok:
+            # --- LOGIQUE D'ALTERNANCE IA / FAKE ---
+            fake_bank_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Fake_Bank")
+            state_file = os.path.join(self.config.account_dir, "last_post_state.json")
+            state = load_post_state(state_file)
+            
+            fake_items = get_fake_items(fake_bank_dir)
+            has_fakes = len(fake_items) > 0
+            
+            if has_fakes and state.get("last_post_type") == "ia":
+                fake_folder = fake_items[0]
+                print(f"\n[Watcher] [Alternance] Alternance activee. Dernier post était IA.")
+                print(f"[Watcher] [Alternance] Preparation de l'annonce FAKE : {os.path.basename(fake_folder)}...")
+                if export_fake_item(fake_folder, self.config.output_dir):
+                    # Deplacement automatique vers le dossier Used pour eviter la reutilisation
+                    used_dir = os.path.join(fake_bank_dir, "Used")
+                    os.makedirs(used_dir, exist_ok=True)
+                    today_str = time.strftime("%Y-%m-%d")
+                    dest_folder_name = f"{today_str}_{os.path.basename(fake_folder)}"
+                    dest_path = os.path.join(used_dir, dest_folder_name)
+                    try:
+                        shutil.move(fake_folder, dest_path)
+                        print(f"[Watcher] [Alternance] [OK] L'annonce fake a ete deplacee vers Used/{dest_folder_name}")
+                    except Exception as move_err:
+                        print(f"[Watcher] [Alternance] [WARN] Echec deplacement du fake : {move_err}")
+                        
+                    save_post_state(state_file, last_post_type="fake", last_fake_index=-1)
+                    if self.publish:
+                        try:
+                            from vinted_publisher import publish_listing
+                            publish_listing(self.config.name, self.config.output_dir, auto_submit=self.submit)
+                        except Exception as pub_err:
+                            print(f"[Watcher] [ERROR] Echec de la publication auto du fake : {pub_err}")
+                    countdown_wait(90)
+            
+            # --- EXPORT DE L'ANNONCE IA ORIGINALE ---
             # Nettoyage préalable de OUTPUT_DIR pour éviter les doublons sur le téléphone
             try:
                 for item in os.listdir(self.config.output_dir):
                     item_path = os.path.join(self.config.output_dir, item)
                     if os.path.isfile(item_path):
                         os.remove(item_path)
-                print(f"[Watcher] Nettoyage préalable réussi : ancienne annonce supprimée de {os.path.basename(self.config.output_dir)}.")
+                print(f"[Watcher] Nettoyage prealable reussi : ancienne annonce supprimee de {os.path.basename(self.config.output_dir)}.")
             except Exception as clean_err:
                 print(f"[Watcher] Note nettoyage : {clean_err}")
- 
+  
             with open(os.path.join(self.config.output_dir, "titre.txt"), "w", encoding="utf-8") as f:
                 f.write(titre)
             with open(os.path.join(self.config.output_dir, "description.txt"), "w", encoding="utf-8") as f:
@@ -247,8 +381,19 @@ class ScreenshotHandler(FileSystemEventHandler):
             if hanger_upscaled_path:
                 humanize_image(hanger_upscaled_path, os.path.join(self.config.output_dir, "hanger_upscaled.jpg"), apply_transform=True)
             print(f"[Watcher] [OK] Tous les fichiers ont été HUMANISÉS et déposés dans {self.config.output_dir}.")
+            
+            # Mise à jour finale de l'état (dernier posté devient IA)
+            current_state = load_post_state(state_file)
+            save_post_state(state_file, last_post_type="ia", last_fake_index=current_state.get("last_fake_index", -1))
+            
+            if self.publish:
+                try:
+                    from vinted_publisher import publish_listing
+                    publish_listing(self.config.name, product_dir, auto_submit=self.submit)
+                except Exception as pub_err:
+                    print(f"[Watcher] [ERROR] Echec de la publication auto de l'IA : {pub_err}")
         else:
-            print(f"[Watcher] [ERROR] Export annulé pour MacroDroid car des images requises sont manquantes ({required_desc}).")
+            print(f"[Watcher] [ERROR] Export annulé car des images requises sont manquantes ({required_desc}).")
             
         # 4. Nettoyage automatique du dossier Input_Screenshots
         try:
@@ -261,11 +406,11 @@ class ScreenshotHandler(FileSystemEventHandler):
         print(f"\n[Watcher] [DONE] Traitement termine ! Annonce prete dans :\n   {product_dir}")
         print("-" * 50)
 
-def start_watcher(account_name="nina"):
+def start_watcher(account_name="nina", publish=False, submit=False):
     config = get_account_config(account_name)
     
     file_queue = queue.Queue()
-    event_handler = ScreenshotHandler(file_queue, config)
+    event_handler = ScreenshotHandler(file_queue, config, publish=publish, submit=submit)
     
     observer = Observer()
     observer.schedule(event_handler, config.input_dir, recursive=False)
@@ -275,6 +420,8 @@ def start_watcher(account_name="nina"):
     print(f"[WATCHER] DEMARRE ET ACTIF [COMPTE : {config.name.upper()}]", flush=True)
     print(f"Dossier ecoute : {config.input_dir}", flush=True)
     print(f"File d'attente active : deposez vos images en vrac !", flush=True)
+    if publish:
+        print(f"Publication automatique activee (Soumission auto: {submit})", flush=True)
     print(f"="*50 + "\n", flush=True)
     
     try:
@@ -286,8 +433,12 @@ def start_watcher(account_name="nina"):
                 # Petite pause pour s'assurer que le fichier est completement ecrit par l'OS
                 time.sleep(2)
                 
-                # Traitement de l'image de maniere strictement sequentielle dans le thread principal
-                event_handler.process_image(file_path)
+                # Traitement de l'image avec verrou global inter-processus (File d'attente)
+                lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_watcher.lock")
+                print(f"[Watcher] En attente de la disponibilité (File d'attente globale)...")
+                with SimpleFileLock(lock_path):
+                    print(f"[Watcher] >>> C'EST MON TOUR ! Traitement de l'image en cours... <<<")
+                    event_handler.process_image(file_path)
                 
                 # Marque la tache comme terminee dans la file
                 file_queue.task_done()
@@ -306,7 +457,9 @@ def start_watcher(account_name="nina"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Watcher d'images automatisé pour pipeline Vinted")
     parser.add_argument("--account", type=str, default="nina", help="Nom du compte cible à surveiller")
+    parser.add_argument("--publish", action="store_true", help="Publier automatiquement via Playwright CDP sur Vinted")
+    parser.add_argument("--submit", action="store_true", help="Publier directement sans attendre de validation humaine")
     
     args = parser.parse_args()
     
-    start_watcher(args.account)
+    start_watcher(args.account, publish=args.publish, submit=args.submit)

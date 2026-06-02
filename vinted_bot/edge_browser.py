@@ -15,8 +15,11 @@ USER_DATA_DIR  = r"D:\AntiGravity\02 Projects\Business Vinted\vinted_bot\Bot_Pro
 
 
 # Selecteurs Gemini identifies par debug en live
-PLUS_BUTTON_SELECTOR  = 'button[aria-label="Ouvrir le menu \\"Importer un fichier\\""]'
+PLUS_BUTTON_SELECTOR  = 'button[aria-label="Importation et outils"]'
 PLUS_BUTTON_FALLBACKS = [
+    'button[aria-label*="Importation" i]',
+    'button[aria-label*="outils" i]',
+    'button[aria-label*="Ouvrir le menu \\"Importer un fichier\\""]',
     'button[aria-label*="Importer un fichier" i]',
     'button[aria-label*="Import" i]',
     'button[aria-label*="fichier" i]',

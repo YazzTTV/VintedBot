@@ -16,7 +16,8 @@ import {
   Search,
   MessageSquare,
   Flame,
-  Boxes
+  Boxes,
+  Puzzle
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -24,6 +25,7 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Inbox 💬', href: '/inbox', icon: MessageSquare },
   { name: 'Winners 🔥', href: '/winners', icon: Flame },
+  { name: 'Extension 🧩', href: '/extension', icon: Puzzle },
   { name: 'Commandes', href: '/commandes', icon: ShoppingBag },
   { name: 'Stock', href: '/stock', icon: Boxes },
   { name: 'Ventes', href: '/ventes', icon: Tag },
@@ -35,6 +37,15 @@ const navigation = [
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false)
+
+  React.useEffect(() => {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then((reg) => console.log('[PWA] Service Worker enregistré avec succès scope:', reg.scope))
+        .catch((err) => console.error('[PWA] Échec enregistrement Service Worker:', err));
+    }
+  }, [])
 
   // Skip main chrome layout logic for standard authorization page
   if (pathname === '/login') {
@@ -43,8 +54,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen w-full bg-[#0c0c0e] text-white overflow-hidden font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-200">
-      {/* Sidebar */}
-      <aside className="w-64 border-r border-zinc-800/50 bg-zinc-950 flex flex-col flex-shrink-0 relative group backdrop-blur-xl">
+      {/* Sidebar Desktop */}
+      <aside className="hidden md:flex w-64 border-r border-zinc-800/50 bg-zinc-950 flex-col flex-shrink-0 relative group backdrop-blur-xl">
         <div className="h-16 flex items-center px-6 border-b border-zinc-800/50">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.3)]">
@@ -99,8 +110,93 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
+      {/* Mobile Drawer (Menu coulissant tactile) */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 z-50 md:hidden flex">
+          {/* Backdrop avec effet de flou */}
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm transition-opacity duration-300"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+          
+          {/* Menu Drawer */}
+          <aside className="relative w-64 max-w-xs bg-zinc-950 border-r border-zinc-800 flex flex-col h-full z-10 animate-in slide-in-from-left duration-250 ease-out shadow-2xl">
+            <div className="h-14 flex items-center justify-between px-4 border-b border-zinc-800/50 bg-zinc-950">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center">
+                  <BarChart3 className="w-4 h-4 text-white" strokeWidth={2.5} />
+                </div>
+                <span className="text-md font-bold tracking-tight text-white">Vinted Manager</span>
+              </div>
+              <button 
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900 border border-zinc-850"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+              {navigation.map((item) => {
+                const isActive = pathname === item.href
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    onClick={() => setIsMobileMenuOpen(false)}
+                    className={cn(
+                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
+                      isActive 
+                        ? "bg-zinc-900 text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]" 
+                        : "text-zinc-400 hover:text-white hover:bg-zinc-900/50"
+                    )}
+                  >
+                    <item.icon className={cn("w-[18px] h-[18px]", isActive ? "text-emerald-500" : "text-zinc-500")} />
+                    {item.name}
+                  </Link>
+                )
+              })}
+            </nav>
+
+            <div className="p-4 border-t border-zinc-800/50 mt-auto bg-zinc-950/80">
+              <div className="flex items-center gap-3 px-2">
+                <div className="w-9 h-9 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center border border-zinc-700">
+                  <User className="w-5 h-5 text-zinc-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-zinc-200 truncate">Administrateur</p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="flex-1 flex flex-col h-full relative overflow-hidden bg-[#0a0a0a]">
+        {/* Mobile Header Bar */}
+        <header className="md:hidden h-14 border-b border-zinc-800/50 bg-zinc-950 flex items-center justify-between px-4 z-20 flex-shrink-0">
+          <button 
+            onClick={() => setIsMobileMenuOpen(true)}
+            className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-900 border border-zinc-800/50 transition-colors cursor-pointer"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+
+          <div className="flex items-center gap-2">
+            <span className="text-md font-bold tracking-tight text-white">
+              Vinted Manager
+            </span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-500 flex items-center justify-center shadow-[0_0_15px_rgba(16,185,129,0.3)]">
+              <BarChart3 className="w-4 h-4 text-white" strokeWidth={2.5} />
+            </div>
+          </div>
+        </header>
+
         {/* Background ambient glow */}
         <div className="absolute top-[-10%] right-[-5%] w-[40%] h-[40%] bg-emerald-500/5 blur-[120px] rounded-full pointer-events-none" />
         <div className="absolute bottom-[-10%] left-[20%] w-[30%] h-[30%] bg-blue-500/5 blur-[120px] rounded-full pointer-events-none" />

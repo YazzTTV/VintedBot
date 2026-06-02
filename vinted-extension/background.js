@@ -20,7 +20,8 @@ const syncState = {
     lastBalanceSync: {}, // Format: { botId: timestamp }
     lastGhostScan: 0,
     isBalanceSyncing: {}, // Format: { botId: boolean }
-    isGhostScanning: false
+    isGhostScanning: false,
+    queuedReplies: [] // Format: [convId1, convId2, ...] pour éviter les doublons de réponses IA
 };
 
 // --- PERSISTENT DASHBOARD WINDOW ---
@@ -503,6 +504,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         
         return true;
     }
+
+    // Déclenchement manuel de l'auto-like de 2 articles
+    if (request.action === "triggerAutoLike") {
+        console.log("🚀 [AUTO-LIKE] Déclenchement manuel demandé par l'utilisateur.");
+        addToCommandQueue({
+            id: `manual_auto_like_${Date.now()}`,
+            execute: async () => {
+                try {
+                    await runAutoLike(true);
+                } catch (e) {
+                    console.error("❌ [AUTO-LIKE QUEUE] Échec :", e.message);
+                }
+            }
+        });
+        sendResponse({ success: true });
+        return true;
+    }
+
+    // Déclenchement manuel du warm-up comportemental passif
+    if (request.action === "triggerManualWarmup") {
+        console.log("🚀 [WARMUP] Déclenchement manuel demandé par l'utilisateur.");
+        runWarmup(true);
+        sendResponse({ success: true });
+        return true;
+    }
 });
 
 // ===================================================================
@@ -565,17 +591,38 @@ function scheduleNextGeminiAlarm() {
     console.log(`🎲 [ALARM] Furtivité IA : Prochain cycle Gemini dans ${randomDelay.toFixed(2)} mins.`);
 }
 
-// Lancement des cycles initiaux aléatoires
-scheduleNextGhostAlarm();
-scheduleNextGeminiAlarm();
+// === WARMUP ALARM (Jitter Aléatoire entre 2h et 3h, soit 120-180 mins) ===
+const WARMUP_ALARM_NAME = "vintedWarmupAlarm";
 
-// Vérifier la file d'actions du Manager en temps quasi réel
+function scheduleNextWarmupAlarm() {
+    const randomDelay = 120 + Math.random() * 60; // Entre 120 et 180 minutes aléatoires
+    chrome.alarms.create(WARMUP_ALARM_NAME, { delayInMinutes: randomDelay });
+    console.log(`🎲 [ALARM] Warm-up comportemental : Prochain cycle dans ${randomDelay.toFixed(2)} mins.`);
+}
+
+// Déclaration des noms d'alarme dans le scope global
 const ACTION_ALARM_NAME = "vintedActionAlarm";
-chrome.alarms.create(ACTION_ALARM_NAME, { periodInMinutes: 1 });
-
-// Synchroniser l'Inbox et les statistiques de ventes régulièrement
 const METRICS_ALARM_NAME = "vintedSyncAlarm";
-chrome.alarms.create(METRICS_ALARM_NAME, { periodInMinutes: 5 });
+
+// Initialisation intelligente des alarmes uniquement si elles n'existent pas déjà.
+// Empêche le reset des comptes à rebours lorsque le Service Worker de l'extension se réveille de son sommeil.
+chrome.alarms.getAll((alarms) => {
+    if (!alarms.find(a => a.name === ALARM_NAME)) {
+        scheduleNextGhostAlarm();
+    }
+    if (!alarms.find(a => a.name === GEMINI_ALARM_NAME)) {
+        scheduleNextGeminiAlarm();
+    }
+    if (!alarms.find(a => a.name === WARMUP_ALARM_NAME)) {
+        scheduleNextWarmupAlarm();
+    }
+    if (!alarms.find(a => a.name === ACTION_ALARM_NAME)) {
+        chrome.alarms.create(ACTION_ALARM_NAME, { periodInMinutes: 1 });
+    }
+    if (!alarms.find(a => a.name === METRICS_ALARM_NAME)) {
+        chrome.alarms.create(METRICS_ALARM_NAME, { periodInMinutes: 5 });
+    }
+});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === ALARM_NAME) {
@@ -614,6 +661,12 @@ chrome.alarms.onAlarm.addListener((alarm) => {
                 console.error("❌ Erreur synchro Inbox/Dressing :", err);
             }
         })();
+    }
+
+    if (alarm.name === WARMUP_ALARM_NAME) {
+        console.log("⏰ [ALARM] Réveil automatique Warm-up");
+        runWarmup(false);
+        scheduleNextWarmupAlarm();
     }
 });
 
@@ -766,9 +819,11 @@ function handleScanResults(data, ghostTabId) {
         const MAX_DM_PER_SCAN = 3; // Max 3 DM par scan pour rester discret
 
         for (const like of data.likes) {
-            // Extraire le nom d'utilisateur depuis le texte ("arthur7534 a marqué...")
-            const userMatch = like.text.match(/^(\S+)\s+a marqué/);
-            const username = userMatch ? userMatch[1] : null;
+            // Extraire le nom d'utilisateur (le premier mot, car Vinted commence toujours la notification par le pseudo)
+            const cleanText = like.text.trim();
+            const firstWord = cleanText.split(/\s+/)[0];
+            const skipWords = ["votre", "vous", "le", "la", "les", "un", "une", "vinted", "félicitations", "bravo"];
+            const username = (!skipWords.includes(firstWord.toLowerCase()) && /^[a-zA-Z0-9_.-]+$/.test(firstWord)) ? firstWord : null;
 
             // FILTRE TEMPOREL DÉSACTIVÉ : Répond à tous les likes, peu importe l'ancienneté.
 
@@ -833,14 +888,43 @@ function handleScanResults(data, ghostTabId) {
 // === LOGGER (Thread-Safe Sequential Queue) ===
 let logPromiseChain = Promise.resolve();
 
-function saveLog(message) {
+function saveLog(message, type = "INFO") {
     const timestamp = new Date().toLocaleTimeString('fr-FR');
     logPromiseChain = logPromiseChain.then(() => {
         return new Promise((resolve) => {
-            chrome.storage.local.get(['activityLog'], (result) => {
+            chrome.storage.local.get(['activityLog', 'lastDetectedUser', 'managerApiUrl'], async (result) => {
                 const logs = result.activityLog || [];
                 logs.push(`[${timestamp}] ${message}`);
-                chrome.storage.local.set({ activityLog: logs.slice(-20) }, resolve);
+                chrome.storage.local.set({ activityLog: logs.slice(-20) });
+
+                // Pousser le log vers le Manager en arrière-plan
+                try {
+                    const botName = result.lastDetectedUser || "system";
+                    const configuredUrl = result.managerApiUrl || DEFAULT_MANAGER_URL;
+                    
+                    let managerUrl;
+                    if (configuredUrl.includes("vercel.app")) {
+                        managerUrl = "http://localhost:3000/api/extension/logs";
+                    } else if (configuredUrl.includes("/api/")) {
+                        managerUrl = configuredUrl.substring(0, configuredUrl.indexOf("/api/")) + "/api/extension/logs";
+                    } else {
+                        managerUrl = "http://localhost:3000/api/extension/logs";
+                    }
+
+                    fetch(managerUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            botAccountName: botName,
+                            message: message,
+                            type: type
+                        })
+                    }).catch(() => {});
+                } catch (e) {
+                    // Silencieux
+                }
+
+                resolve();
             });
         });
     });
@@ -887,6 +971,7 @@ async function syncAccountBalanceToManager(force = false) {
         const username = userRes.username;
         const vintedId = userRes.id;
         console.log(`👤 [SYNC] Identité détectée : ${username} (${vintedId})`);
+        chrome.storage.local.set({ lastDetectedUser: username });
 
         // --- COOLDOWN & LOCKING ---
         const now = Date.now();
@@ -1090,6 +1175,7 @@ async function syncVintedOrdersToManager() {
 
         const username = userRes.username;
         const vintedId = userRes.id;
+        chrome.storage.local.set({ lastDetectedUser: username });
 
         // 3. Injecter la requête Same-Origin furtive inspirée de Vinteo pour ramener les 50 dernières ventes
         console.log(`📦 [SYNC ORDERS] Injection de l'aspiration furtive dans l'onglet #${tabId}...`);
@@ -1981,6 +2067,13 @@ async function runGeminiScan(force = false) {
                 if (countProcessed >= 3) break;
                 
                 const convId = c.id;
+                
+                // 🛡️ ANTI-DOUBLON : Skip si une réponse est déjà planifiée dans la file d'actions
+                if (syncState.queuedReplies.includes(convId)) {
+                    console.log(`⏭️ [GEMINI] Réponse déjà en cours de traitement/planifiée pour #${convId}. Skip.`);
+                    continue;
+                }
+
                 const opponentName = c.opposite_user?.login || "inconnu";
                 const opponentId = c.opposite_user?.id ? String(c.opposite_user.id) : null;
                 
@@ -1991,6 +2084,19 @@ async function runGeminiScan(force = false) {
                 const details = detailRes.data.conversation || detailRes.data || {};
                 const messages = details.messages || [];
                 if (messages.length === 0) continue;
+                
+                // 🛡️ FILTRE TRANSACTION : ignorer si le colis est acheté, en cours d'envoi ou livré
+                const isTx = c.is_transaction === true || 
+                             details.is_transaction === true || 
+                             !!c.transaction || 
+                             !!details.transaction || 
+                             !!c.shipping_order || 
+                             !!details.shipping_order;
+                             
+                if (isTx) {
+                    console.log(`⏭️ [GEMINI] La conversation #${convId} avec @${opponentName} est liée à une transaction (colis acheté/envoyé). Skip.`);
+                    continue;
+                }
                 
                 // --- DÉTECTION ROBUSTE & RÉCURSIVE DU PRIX DE L'ARTICLE ---
                 const itemD = details.item || {};
@@ -2117,10 +2223,16 @@ async function runGeminiScan(force = false) {
                     console.log(`✨ [GEMINI] Texte généré pour @${opponentName} : "${finalReplyText}"`);
                     
                     // 6. ENVOI SÉQUENTIEL : Empilement dans la Command Queue
+                    syncState.queuedReplies.push(convId); // Verrouiller la conversation
                     addToCommandQueue({
                         id: `gemini_reply_${convId}_to_${opponentName}`,
                         execute: async () => {
                             return new Promise((resolve) => {
+                                const cleanUp = () => {
+                                    syncState.queuedReplies = syncState.queuedReplies.filter(id => id !== convId);
+                                    resolve();
+                                };
+                                
                                 let url = `https://www.vinted.fr/inbox/${convId}?gemini=1&reply_text=${encodeURIComponent(finalReplyText)}`;
                                 if (triggerOfferPrice) {
                                     url += `&offer_price=${triggerOfferPrice}`;
@@ -2132,7 +2244,7 @@ async function runGeminiScan(force = false) {
                                     setTimeout(() => {
                                         chrome.tabs.remove(tab.id).catch(() => {});
                                         saveLog(`✅ IA : Traitement terminé pour @${opponentName}`);
-                                        resolve();
+                                        cleanUp();
                                     }, 25000);
                                 });
                             });
@@ -2252,6 +2364,255 @@ async function generateGeminiResponse(history, botName, itemTitle, itemPrice, mi
         saveLog(`❌ IA : Échec API Gemini (${e.message.substring(0, 30)})`);
         return null;
     }
+}
+
+/**
+ * 🎭 Routine de warm-up comportemental passif
+ * Défile la page d'accueil Vinted et like 2 ou 3 articles par jour au hasard.
+ */
+async function runWarmup(force = false) {
+    const today = new Date().toDateString();
+    chrome.storage.local.get(['botActive', 'warmupLastDate', 'warmupLikesToday', 'warmupTarget'], async (res) => {
+        if (!res.botActive && !force) {
+            console.log("😴 [WARMUP] Bot inactif, warm-up annulé.");
+            return;
+        }
+
+        let likesToday = res.warmupLikesToday || 0;
+        let lastDate = res.warmupLastDate || "";
+        let target = res.warmupTarget || 2;
+
+        if (lastDate !== today) {
+            likesToday = 0;
+            lastDate = today;
+            target = Math.floor(Math.random() * 2) + 2; // Choisit aléatoirement 2 ou 3 likes par jour
+            chrome.storage.local.set({ warmupLastDate: today, warmupLikesToday: 0, warmupTarget: target });
+        }
+
+        if (likesToday >= target && !force) {
+            console.log(`✅ [WARMUP] Quota de warm-up quotidien déjà atteint (${likesToday}/${target} likes).`);
+            return;
+        }
+
+        // Récupérer le nom et domaine du bot actif
+        let baseOrigin = "https://www.vinted.fr";
+        const optimalTab = await getOptimalVintedTab();
+        if (optimalTab && optimalTab.url) {
+            try {
+                baseOrigin = new URL(optimalTab.url).origin;
+            } catch(e){}
+        }
+
+        console.log(`🎭 [WARMUP] Lancement du cycle de warm-up passif sur ${baseOrigin}...`);
+        saveLog("🎭 Warm-up : Début du cycle");
+
+        chrome.tabs.create({ url: baseOrigin, active: false }, (warmupTab) => {
+            const tabId = warmupTab.id;
+
+            // Écouter le chargement de l'onglet fantôme
+            chrome.tabs.onUpdated.addListener(function listener(tId, info) {
+                if (tId === tabId && info.status === 'complete') {
+                    chrome.tabs.onUpdated.removeListener(listener);
+
+                    // Attendre 5 secondes que le flux (React) apparaisse
+                    setTimeout(() => {
+                        chrome.scripting.executeScript({
+                            target: { tabId },
+                            func: async () => {
+                                try {
+                                    // 1. Simuler un défilement humain progressif
+                                    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+                                    console.log("🎭 [WARMUP INJECT] Scrolling...");
+                                    
+                                    for (let i = 0; i < 4; i++) {
+                                        window.scrollBy({ top: 300 + Math.random() * 200, behavior: 'smooth' });
+                                        await sleep(1200 + Math.random() * 800);
+                                    }
+                                    
+                                    // 2. Chercher les boutons favoris (cœur) non likés
+                                    const hearts = Array.from(document.querySelectorAll('button[class*="favourite"], [data-testid*="favourite"], [data-testid*="favorite"]'));
+                                    
+                                    const unliked = hearts.filter(btn => {
+                                        const isLiked = btn.querySelector('[class*="active"], [class*="filled"], [class*="selected"]') || 
+                                                        btn.className.includes('active') || 
+                                                        btn.ariaLabel?.includes('supprimer') || 
+                                                        btn.ariaLabel?.includes('remove') ||
+                                                        btn.ariaLabel?.includes('Favori enregistré');
+                                        return !isLiked;
+                                    });
+                                    
+                                    if (unliked.length === 0) {
+                                        return { liked: 0, reason: "Aucun bouton favori disponible" };
+                                    }
+                                    
+                                    // Choisir un élément aléatoire à liker
+                                    const targetHeart = unliked[Math.floor(Math.random() * unliked.length)];
+                                    targetHeart.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    await sleep(1500 + Math.random() * 1000);
+                                    
+                                    // Simuler le clic
+                                    targetHeart.click();
+                                    console.log("🎭 [WARMUP INJECT] Article liké !");
+                                    await sleep(2000);
+                                    
+                                    return { liked: 1 };
+                                } catch (e) {
+                                    return { liked: 0, error: e.message };
+                                }
+                            }
+                        }).then((results) => {
+                            const res = results?.[0]?.result || { liked: 0 };
+                            chrome.tabs.remove(tabId).catch(() => {});
+
+                            if (res.liked > 0) {
+                                chrome.storage.local.get(['warmupLikesToday'], (data) => {
+                                    const newCount = (data.warmupLikesToday || 0) + 1;
+                                    chrome.storage.local.set({ warmupLikesToday: newCount }, () => {
+                                        console.log(`🎭 [WARMUP] 1 article liké avec succès (${newCount}/${target} aujourd'hui).`);
+                                        saveLog(`🎭 Warm-up : 1 article liké (${newCount}/${target} aujourd'hui)`);
+                                    });
+                                });
+                            } else {
+                                console.log("🎭 [WARMUP] Aucun like effectué :", res.reason || res.error || "Inconnu");
+                                saveLog("🎭 Warm-up : Aucun article liké lors du cycle");
+                            }
+                        }).catch(err => {
+                            console.error("❌ [WARMUP] Erreur exécution script :", err);
+                            chrome.tabs.remove(tabId).catch(() => {});
+                        });
+                    }, 5000);
+                }
+            });
+        });
+    });
+}
+
+/**
+ * 🎭 Routine d'Auto-Like comportementale manuelle/automatique
+ * Défile la page d'accueil ou de recherche Vinted et like exactement 2 articles.
+ */
+async function runAutoLike(force = false) {
+    return new Promise(async (resolve, reject) => {
+        chrome.storage.local.get(['botActive'], async (res) => {
+            if (!res.botActive && !force) {
+                console.log("😴 [AUTO-LIKE] Bot inactif, abandon.");
+                return resolve({ success: false, error: "Bot inactif" });
+            }
+
+            // Récupérer le nom et domaine du bot actif
+            let baseOrigin = "https://www.vinted.fr";
+            const optimalTab = await getOptimalVintedTab();
+            if (optimalTab && optimalTab.url) {
+                try {
+                    baseOrigin = new URL(optimalTab.url).origin;
+                } catch(e){}
+            }
+
+            console.log(`🎭 [AUTO-LIKE] Lancement du cycle d'auto-like sur ${baseOrigin}...`);
+            saveLog("🎭 Auto-Like : Début du cycle (2 articles)");
+
+            chrome.tabs.create({ url: baseOrigin, active: false }, (likeTab) => {
+                const tabId = likeTab.id;
+
+                // Écouter le chargement de l'onglet fantôme
+                chrome.tabs.onUpdated.addListener(function listener(tId, info) {
+                    if (tId === tabId && info.status === 'complete') {
+                        chrome.tabs.onUpdated.removeListener(listener);
+
+                        // Attendre 5 secondes que le flux (React) apparaisse
+                        setTimeout(() => {
+                            chrome.scripting.executeScript({
+                                target: { tabId },
+                                func: async () => {
+                                    try {
+                                        const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+                                        let likedCount = 0;
+                                        
+                                        // Trouver les boutons favoris (cœur) non likés
+                                        const getUnlikedHearts = () => {
+                                            const hearts = Array.from(document.querySelectorAll('button[class*="favourite"], [data-testid*="favourite"], [data-testid*="favorite"], button[aria-label*="Favori"], button[aria-label*="favori"]'));
+                                            return hearts.filter(btn => {
+                                                const isLiked = btn.querySelector('[class*="active"], [class*="filled"], [class*="selected"]') || 
+                                                                btn.className.includes('active') || 
+                                                                btn.ariaLabel?.includes('supprimer') || 
+                                                                btn.ariaLabel?.includes('remove') ||
+                                                                btn.ariaLabel?.includes('Favori enregistré');
+                                                return !isLiked;
+                                            });
+                                        };
+
+                                        // 1. Simuler un défilement humain progressif pour charger les articles
+                                        console.log("🎭 [AUTO-LIKE INJECT] Scrolling...");
+                                        for (let i = 0; i < 5; i++) {
+                                            window.scrollBy({ top: 400 + Math.random() * 200, behavior: 'smooth' });
+                                            await sleep(1500 + Math.random() * 500);
+                                        }
+
+                                        let unliked = getUnlikedHearts();
+                                        console.log(`🎭 [AUTO-LIKE INJECT] ${unliked.length} favoris éligibles.`);
+
+                                        if (unliked.length < 2) {
+                                            // Plus de scroll si pas assez
+                                            for (let i = 0; i < 3; i++) {
+                                                window.scrollBy({ top: 500, behavior: 'smooth' });
+                                                await sleep(1500);
+                                            }
+                                            unliked = getUnlikedHearts();
+                                        }
+
+                                        if (unliked.length === 0) {
+                                            return { liked: 0, reason: "Aucun article disponible pour le like" };
+                                        }
+
+                                        // Liker le premier article
+                                        const firstHeart = unliked[0];
+                                        firstHeart.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                        await sleep(2000 + Math.random() * 1000);
+                                        firstHeart.click();
+                                        likedCount++;
+                                        console.log("🎭 [AUTO-LIKE INJECT] Premier article liké");
+
+                                        // Liker le deuxième article (s'il y en a un deuxième)
+                                        if (unliked.length > 1) {
+                                            await sleep(3000 + Math.random() * 1500); // Pause humaine entre les likes
+                                            const secondHeart = unliked[1];
+                                            secondHeart.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                            await sleep(2000 + Math.random() * 1000);
+                                            secondHeart.click();
+                                            likedCount++;
+                                            console.log("🎭 [AUTO-LIKE INJECT] Deuxième article liké");
+                                        }
+
+                                        return { liked: likedCount };
+                                    } catch (e) {
+                                        return { liked: 0, error: e.message };
+                                    }
+                                }
+                            }).then((results) => {
+                                const res = results?.[0]?.result || { liked: 0 };
+                                chrome.tabs.remove(tabId).catch(() => {});
+
+                                if (res.liked > 0) {
+                                    console.log(`🎭 [AUTO-LIKE] ${res.liked} articles likés avec succès.`);
+                                    saveLog(`🎭 Auto-Like : ${res.liked} articles likés avec succès`);
+                                    resolve({ success: true, liked: res.liked });
+                                } else {
+                                    console.log("🎭 [AUTO-LIKE] Aucun like effectué :", res.reason || res.error || "Inconnu");
+                                    saveLog(`🎭 Auto-Like : Aucun article liké (${res.reason || res.error || "Inconnu"})`);
+                                    resolve({ success: false, error: res.reason || res.error || "Aucun article trouvé" });
+                                }
+                            }).catch(err => {
+                                console.error("❌ [AUTO-LIKE] Erreur exécution script :", err);
+                                chrome.tabs.remove(tabId).catch(() => {});
+                                saveLog(`❌ Auto-Like : Erreur interne d'injection`);
+                                reject(err);
+                            });
+                        }, 5000);
+                    }
+                });
+            });
+        });
+    });
 }
 
 console.log("🧠 [GHOST BOOT] Background Service Worker initialisé à 100% sans erreur !");

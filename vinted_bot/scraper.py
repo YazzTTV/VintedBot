@@ -282,6 +282,21 @@ async def scrape_products(count: int, url: str, output_dir: str, archive_dir: st
                     if product_url_base in history_urls:
                         continue
                         
+                    # Obtenir le texte de la carte pour identifier la marque
+                    card_text = ""
+                    try:
+                        card_text = await card.inner_text()
+                    except Exception:
+                        pass
+                        
+                    # Filtrer les produits de marque SHEIN (SHEIN Clasi, SHEIN LUNE, etc.)
+                    # afin de conserver uniquement les autres marques de la marketplace (Breezaya, Emery Rose, etc.)
+                    from urllib.parse import urlparse
+                    url_path = urlparse(product_url).path.lower()
+                    if "shein" in card_text.lower() or "shein" in url_path:
+                        print(f"[Scraper] Produit de la marque SHEIN ignore : {product_url_base.split('/')[-1]}")
+                        continue
+                        
                     # --- Filtre strict de catégories selon la niche ---
                     product_url_lower = product_url.lower()
                     

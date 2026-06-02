@@ -80,7 +80,35 @@ python scraper.py --account nina --count 10 --url "https://fr.shein.com/Women-Sk
 
 ---
 
-## 📝 4. Gérer tes commandes vendues
+## 🏦 4. Gérer la Fake Bank (Alimentation & Recyclage)
+
+Le **Fake Bank Builder** te permet d'alimenter ta banque d'annonces réelles en lot sans avoir à écrire les titres et descriptions à la main.
+
+### 📁 Comment préparer tes images dans `Fake_Bank/Input/` :
+* **Annonce avec 1 seule photo** : Glisse simplement la photo brute (ex: `table.jpg`) directement à la racine de `vinted_bot/Fake_Bank/Input/`.
+* **Annonce avec plusieurs photos (Recommandé)** : Crée un sous-dossier dans `Input/` (ex: `vase_bleu/`) et glisses-y les photos de l'objet sous différents angles. Le script prendra la première photo pour l'analyse IA, et rangera toutes les photos ensemble dans le dossier final de la banque.
+
+### 🚀 Lancer l'alimentation de la Fake Bank :
+Déplace-toi d'abord dans le dossier du bot, puis lance le script. Il va lister les rappels de recyclage, traiter toutes les images/dossiers présents dans `Input/`, puis s'arrêter proprement :
+
+```powershell
+python fake_bank_builder.py --account nina
+```
+*(Tu peux remplacer `--account nina` par un autre compte comme `lena` ou `orane` pour adapter automatiquement la langue de génération des annonces en néerlandais, etc.)*
+
+> [!TIP]
+> **Mode Watcher Continu** : Si tu préfères que le script tourne en continu et traite les images dès que tu les déposes, ajoute l'option `--watch` :
+> ```powershell
+> python fake_bank_builder.py --account nina --watch
+> ```
+
+### 🔄 Le Cycle de Recyclage (J+3) :
+1. **Consommation unique** : Lorsqu'un bot utilise une annonce fake lors de l'alternance, il déplace automatiquement son dossier vers `Fake_Bank/Used/`. Aucun doublon n'est possible entre tes comptes.
+2. **Rappels automatiques** : À chaque lancement de `fake_bank_builder.py`, le terminal analyse tes fakes déjà utilisées et t'affiche une liste des objets qui ont été postés il y a **3 jours ou plus**. C'est le moment idéal pour les re-prendre en photo sous un autre angle et les remettre dans `Input/` !
+
+---
+
+## 📝 5. Gérer tes commandes vendues
 
 Une fois que tes annonces sont publiées et qu'un article est vendu, ouvre l'historique de commandes correspondant à ton compte dans Obsidian :
 - **Compte Nina** : 👉 [[02 Projects/Business Vinted/Accounts/nina/Sourcing_History|Historique Nina]]

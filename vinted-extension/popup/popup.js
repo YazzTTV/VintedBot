@@ -28,6 +28,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const ghostTimer = document.getElementById('ghost-timer');
     const syncTimer = document.getElementById('sync-timer');
     const geminiTimer = document.getElementById('gemini-timer');
+    const likeTimer = document.getElementById('like-timer');
+    let isAutoLikeRunning = false;
 
     function updateTimers() {
         chrome.alarms.getAll((alarms) => {
@@ -88,6 +90,39 @@ document.addEventListener('DOMContentLoaded', () => {
                 geminiTimer.innerHTML = `<span>🔮</span> IA : planification...`;
                 geminiTimer.className = 'timer-badge';
             }
+
+            // 4. Warm-up (Auto-Like / Activité passive)
+            if (!isAutoLikeRunning && likeTimer) {
+                const warmupAlarm = alarms.find(a => a.name === 'vintedWarmupAlarm');
+                if (warmupAlarm) {
+                    const diff = Math.max(0, warmupAlarm.scheduledTime - now);
+                    const totalMins = Math.floor(diff / 60000);
+                    const mins = totalMins % 60;
+                    const hours = Math.floor(totalMins / 60);
+                    const secs = Math.floor((diff % 60000) / 1000);
+                    
+                    chrome.storage.local.get(['botActive'], (res) => {
+                        if (!isAutoLikeRunning) {
+                            if (res.botActive) {
+                                let timeStr = "";
+                                if (hours > 0) {
+                                    timeStr = `${hours}h ${mins}m ${secs.toString().padStart(2, '0')}s`;
+                                } else {
+                                    timeStr = `${mins}m ${secs.toString().padStart(2, '0')}s`;
+                                }
+                                likeTimer.innerHTML = `<span>❤️</span> Warm-up : <b>${timeStr}</b>`;
+                                likeTimer.className = 'timer-badge active-timer';
+                            } else {
+                                likeTimer.innerHTML = `<span>😴</span> Warm-up inactif (Sommeil)`;
+                                likeTimer.className = 'timer-badge';
+                            }
+                        }
+                    });
+                } else {
+                    likeTimer.innerHTML = `<span>❤️</span> Warm-up : planification...`;
+                    likeTimer.className = 'timer-badge';
+                }
+            }
         });
     }
     
@@ -136,6 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusBadge = document.getElementById('status-badge');
     const statusBadgeContainer = document.getElementById('status-badge-container');
     const negoThresholdInput = document.getElementById('nego-threshold');
+    const geminiKeyInput = document.getElementById('gemini-key');
     
     let isBotActive = false;
 
@@ -154,10 +190,23 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // Récupérer la clé API Gemini sauvegardée
+    chrome.storage.local.get(['geminiApiKey'], (result) => {
+        if (result.geminiApiKey) {
+            geminiKeyInput.value = result.geminiApiKey;
+        }
+    });
+
     // Sauvegarder le seuil quand il change
     negoThresholdInput.addEventListener('change', () => {
         const value = parseInt(negoThresholdInput.value, 10);
         chrome.storage.local.set({ negoThreshold: value });
+    });
+
+    // Sauvegarder la clé quand elle change
+    geminiKeyInput.addEventListener('change', () => {
+        const value = geminiKeyInput.value.trim();
+        chrome.storage.local.set({ geminiApiKey: value });
     });
 
     toggleBtn.addEventListener('click', () => {
@@ -212,6 +261,46 @@ document.addEventListener('DOMContentLoaded', () => {
                     checkGeminiBtn.disabled = false;
                     checkGeminiBtn.innerHTML = originalText;
                     checkGeminiBtn.className = "btn btn-secondary";
+                }, 4000);
+            });
+        });
+    }
+
+    const autoLikeBtn = document.getElementById('auto-like-btn');
+    if (autoLikeBtn && likeTimer) {
+        autoLikeBtn.addEventListener('click', () => {
+            isAutoLikeRunning = true;
+            const originalText = autoLikeBtn.innerHTML;
+            autoLikeBtn.innerHTML = "<span>⌛</span> Likes en cours...";
+            autoLikeBtn.disabled = true;
+            likeTimer.innerHTML = "<span>⚡</span> Exécution en cours...";
+            likeTimer.className = "timer-badge active-timer";
+
+            chrome.runtime.sendMessage({ action: "triggerAutoLike" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Error:", chrome.runtime.lastError.message);
+                    autoLikeBtn.innerHTML = "<span>⚠️</span> Service HS";
+                    autoLikeBtn.className = "btn btn-danger";
+                    likeTimer.innerHTML = "<span>❌</span> Échec communication background";
+                    likeTimer.className = "timer-badge";
+                } else if (response && response.success) {
+                    autoLikeBtn.innerHTML = "<span>✅</span> Auto-Like Lancé !";
+                    autoLikeBtn.className = "btn btn-success";
+                    likeTimer.innerHTML = "<span>🎉</span> Tâche envoyée avec succès";
+                    likeTimer.className = "timer-badge active-timer";
+                } else {
+                    autoLikeBtn.innerHTML = "<span>⚠️</span> Échec";
+                    autoLikeBtn.className = "btn btn-danger";
+                    likeTimer.innerHTML = `<span>❌</span> ${response?.error || "Inconnu"}`;
+                    likeTimer.className = "timer-badge";
+                }
+                
+                setTimeout(() => {
+                    isAutoLikeRunning = false;
+                    autoLikeBtn.disabled = !isBotActive;
+                    autoLikeBtn.innerHTML = originalText;
+                    autoLikeBtn.className = "btn btn-secondary";
+                    updateTimers(); // Actualisation immédiate du timer
                 }, 4000);
             });
         });
@@ -280,6 +369,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function updateUI() {
         const checkNowBtn = document.getElementById('check-now-btn');
         const checkGeminiBtn = document.getElementById('check-gemini-btn');
+        const autoLikeBtn = document.getElementById('auto-like-btn');
 
         if (isBotActive) {
             statusBadge.textContent = 'Online';
@@ -289,6 +379,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (checkNowBtn) checkNowBtn.disabled = false;
             if (checkGeminiBtn) checkGeminiBtn.disabled = false;
+            if (autoLikeBtn) autoLikeBtn.disabled = false;
         } else {
             statusBadge.textContent = 'Offline';
             statusBadgeContainer.className = 'status-badge inactive';
@@ -297,6 +388,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (checkNowBtn) checkNowBtn.disabled = true;
             if (checkGeminiBtn) checkGeminiBtn.disabled = true;
+            if (autoLikeBtn) autoLikeBtn.disabled = true;
         }
     }
 

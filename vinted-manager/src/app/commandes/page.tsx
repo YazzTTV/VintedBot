@@ -427,7 +427,7 @@ export default function CommandesPage() {
   }
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-6xl mx-auto w-full">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-6xl mx-auto w-full">
       {/* Header */}
       <header>
         <h1 className="text-3xl font-bold text-white tracking-tight">Commandes Fournisseurs</h1>

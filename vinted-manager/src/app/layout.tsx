@@ -19,7 +19,14 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Vinted Manager | Pilotage & Stock",
   description: "Plateforme centrale de gestion automatisée de commandes Vinted.",
+  manifest: "/manifest.json",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Vinted Manager",
+  },
 };
+
 
 export default function RootLayout({
   children,

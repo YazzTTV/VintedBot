@@ -79,7 +79,7 @@ export default function WinnersPage() {
   }, [metrics, filterMode, sortKey])
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-7xl mx-auto w-full min-h-full relative">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-7xl mx-auto w-full min-h-full relative">
       
       {/* Glows Ambient Backgrounds - Orange pour le feu des Winners */}
       <div className="fixed top-0 right-0 w-[45%] h-[45%] bg-orange-500/5 blur-[130px] pointer-events-none rounded-full -z-10" />
@@ -228,7 +228,7 @@ export default function WinnersPage() {
 
       {/* --- MAIN TABLE --- */}
       <div className="bg-zinc-950/80 border border-zinc-800/60 rounded-2xl shadow-2xl shadow-black/60 backdrop-blur-md overflow-hidden flex flex-col flex-1">
-        <div className="overflow-x-auto">
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-zinc-900/40 text-zinc-500 text-[11px] font-black tracking-wider uppercase border-b border-zinc-800">
@@ -405,6 +405,152 @@ export default function WinnersPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Grille de cartes pour mobile */}
+        <div className="grid grid-cols-1 gap-4 p-4 md:hidden">
+          {loading ? (
+            <div className="py-16 text-center text-zinc-500">
+              <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-orange-500" /> Chargement des tendances...
+            </div>
+          ) : processedMetrics.length === 0 ? (
+            <div className="py-16 text-center text-zinc-500 text-xs">
+              Aucun produit détecté dans cette catégorie.
+            </div>
+          ) : (
+            processedMetrics.map((item: any) => {
+              const isSold = item.status?.toLowerCase().includes('vendu') || item.status?.toLowerCase().includes('sold')
+              const isWinner = item.isWinner
+              const isOutOfStockWinner = isWinner && item.physicalStockCount === 0 && !isSold
+
+              return (
+                <div 
+                  key={item.id} 
+                  className={cn(
+                    "p-4 rounded-2xl border bg-zinc-950/40 backdrop-blur-sm relative overflow-hidden flex flex-col gap-4 shadow-md",
+                    isOutOfStockWinner ? "border-red-500/20 bg-red-950/5" : "border-zinc-800/60"
+                  )}
+                >
+                  {isWinner && (
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-orange-500 to-amber-400" />
+                  )}
+
+                  <div className="flex gap-4">
+                    {/* Visual */}
+                    <div className="w-16 h-20 rounded-lg bg-zinc-900 border border-zinc-700/60 overflow-hidden flex items-center justify-center relative shrink-0">
+                      {item.photoUrl ? (
+                        <img src={item.photoUrl} alt={item.title} className="w-full h-full object-cover" />
+                      ) : (
+                        <ShoppingBag className="w-5 h-5 text-zinc-600" />
+                      )}
+                      {isWinner && (
+                        <div className="absolute top-1 left-1 w-4 h-4 bg-orange-500 text-white rounded-full flex items-center justify-center shadow-[0_0_10px_rgba(249,115,22,0.6)]">
+                          <Flame className="w-2.5 h-2.5 fill-current" />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Details */}
+                    <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
+                      <div>
+                        <h3 className="font-bold text-white text-sm tracking-tight flex items-center gap-1.5">
+                          <span className="truncate">{item.title}</span>
+                          {item.url && (
+                            <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-zinc-300 inline-block shrink-0">
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                          <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
+                            {item.botAccount.name}
+                          </span>
+                          <span className="text-[9px] text-zinc-500 font-mono flex items-center gap-0.5">
+                            <Clock className="w-2.5 h-2.5" /> {new Date(item.updatedAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Engagement & Stats */}
+                  <div className="grid grid-cols-2 gap-2 bg-zinc-900/40 p-2.5 rounded-xl border border-zinc-900">
+                    <div className="flex items-center gap-1.5 justify-center py-1">
+                      <Eye className="w-3.5 h-3.5 text-blue-400" />
+                      <span className="text-xs font-mono font-bold text-zinc-300">{item.viewCount} <span className="text-[9px] text-zinc-500 font-normal">vues</span></span>
+                    </div>
+                    <div className="flex items-center gap-1.5 justify-center py-1 border-l border-zinc-900">
+                      <Heart className="w-3.5 h-3.5 text-rose-400" />
+                      <span className="text-xs font-mono font-bold text-zinc-300">{item.favouriteCount} <span className="text-[9px] text-zinc-500 font-normal">likes</span></span>
+                    </div>
+                  </div>
+
+                  {/* Winner Status / Stock / Sourcing */}
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-500 font-medium">Statut Winner :</span>
+                      {isWinner ? (
+                        item.winnerReason === "STATISTIQUES" ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/25 text-[10px] font-extrabold tracking-wide">
+                            🏆 Winner Stats
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/25 text-[10px] font-extrabold tracking-wide">
+                            ⚡ Vente Flash
+                          </span>
+                        )
+                      ) : (
+                        <span className="text-zinc-400 font-medium">Standard</span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-500 font-medium">Stock Physique :</span>
+                      {isSold ? (
+                        <span className="px-2 py-0.5 rounded bg-zinc-850 text-zinc-500 border border-zinc-800 text-[9px] font-bold uppercase">
+                          Vendu
+                        </span>
+                      ) : item.physicalStockCount > 0 ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-extrabold">
+                          <CheckCircle2 className="w-3 h-3" /> {item.physicalStockCount} Dispo
+                        </span>
+                      ) : isWinner ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/25 font-black uppercase animate-pulse">
+                          <AlertTriangle className="w-3 h-3 shrink-0" /> Rupture !
+                        </span>
+                      ) : (
+                        <span className="text-zinc-500 italic font-medium">Zéro stock</span>
+                      )}
+                    </div>
+
+                    {/* Sourcing Action */}
+                    <div className="mt-1">
+                      {item.sourcingUrl ? (
+                        <a 
+                          href={item.sourcingUrl} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className={cn(
+                            "w-full flex items-center justify-center gap-2 py-3 rounded-xl text-xs font-extrabold transition-all shadow-md cursor-pointer",
+                            isOutOfStockWinner 
+                              ? "bg-emerald-600 text-white hover:bg-emerald-500 shadow-emerald-950/40 ring-2 ring-emerald-500/50 shadow-[0_0_15px_rgba(16,185,129,0.2)]"
+                              : "bg-zinc-900 border border-zinc-800 text-zinc-200 hover:text-white"
+                          )}
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5 shrink-0" />
+                          {isOutOfStockWinner ? "Commander D'Urgence" : "Commander"}
+                        </a>
+                      ) : (
+                        <div className="w-full text-center py-2.5 bg-zinc-900/40 border border-zinc-900 text-zinc-600 text-[10px] italic rounded-xl">
+                          Lien Sourcing non lié
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
         </div>
       </div>
 

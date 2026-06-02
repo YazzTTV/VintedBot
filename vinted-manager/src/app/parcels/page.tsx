@@ -382,7 +382,7 @@ export default function ParcelsPage() {
   )
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-7xl mx-auto w-full min-h-full">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-7xl mx-auto w-full min-h-full">
       {/* Ambient glow */}
       <div className="fixed top-0 right-0 w-[40%] h-[40%] bg-blue-500/5 blur-[150px] -z-10 rounded-full pointer-events-none" />
 
@@ -398,7 +398,7 @@ export default function ParcelsPage() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           <label className="flex items-center gap-2 cursor-pointer select-none px-3 py-2.5 rounded-xl border border-zinc-800 bg-zinc-900 hover:border-zinc-700 transition-colors">
             <input
               type="checkbox"
@@ -475,7 +475,7 @@ export default function ParcelsPage() {
           </span>
         </div>
 
-        <div className="overflow-x-auto w-full min-h-[280px]">
+        <div className="hidden md:block overflow-x-auto w-full min-h-[280px]">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="text-xs font-bold text-zinc-500 tracking-wider uppercase border-b border-zinc-900">
@@ -697,6 +697,155 @@ export default function ParcelsPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Grille de cartes pour mobile */}
+        <div className="grid grid-cols-1 gap-4 p-4 md:hidden">
+          {loading ? (
+            <div className="py-16 text-center text-zinc-500">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 opacity-50" />
+              Chargement des colis...
+            </div>
+          ) : parcels.length === 0 ? (
+            <div className="py-16 text-center text-zinc-500">
+              <Package className="w-10 h-10 mx-auto mb-2 opacity-20" />
+              Aucun colis enregistré.
+            </div>
+          ) : (
+            parcels.map((parcel) => {
+              const isExpanded = expandedId === parcel.id
+              const deadline = getEarliestDeadline(parcel.ventes)
+              const deadlinePast = isDeadlinePast(deadline)
+
+              return (
+                <div 
+                  key={parcel.id}
+                  className="p-4 rounded-2xl border border-zinc-850 bg-zinc-950/40 backdrop-blur-sm relative flex flex-col gap-4 shadow-md group"
+                >
+                  <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => toggleExpand(parcel.id)}
+                      className="text-sm font-mono font-bold text-white hover:text-blue-400 transition-colors flex items-center gap-1.5 cursor-pointer text-left"
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="w-4 h-4 text-zinc-500 shrink-0" />
+                      ) : (
+                        <ChevronRight className="w-4 h-4 text-zinc-500 shrink-0" />
+                      )}
+                      {parcel.trackingNumber}
+                    </button>
+                    {parcel.carrier && (
+                      <span className="text-[10px] font-bold text-zinc-300 bg-zinc-900 border border-zinc-800 px-2 py-0.5 rounded capitalize">
+                        {parcel.carrier}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Statut</span>
+                      <TrackingCell parcel={parcel} compact />
+                    </div>
+                    <div className="flex flex-col gap-1 border-l border-zinc-900 pl-3">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Dernière MàJ</span>
+                      <span className="text-zinc-300 font-medium">{timeAgo(parcel.lastUpdate)}</span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 text-xs border-t border-zinc-900/60 pt-3">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Commande</span>
+                      {parcel.commande ? (
+                        <span className="text-zinc-300 font-bold">
+                          {parcel.commande.numero} <span className="text-[10px] text-zinc-500 font-medium block">({parcel.commande.fournisseur})</span>
+                        </span>
+                      ) : (
+                        <span className="text-zinc-500 italic">—</span>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1 border-l border-zinc-900 pl-3">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Deadline Vinted</span>
+                      {deadline ? (
+                        <span className={cn("font-bold flex items-center gap-1", deadlinePast ? "text-rose-400 animate-pulse" : "text-zinc-300")}>
+                          {deadlinePast && <AlertTriangle className="w-3.5 h-3.5 shrink-0" />}
+                          {formatDate(deadline)}
+                        </span>
+                      ) : (
+                        <span className="text-zinc-500">—</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {parcel.ventes && parcel.ventes.length > 0 && (
+                    <div className="border-t border-zinc-900/60 pt-3 flex flex-col gap-1">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Ventes liées</span>
+                      <div className="flex flex-wrap gap-1">
+                        {parcel.ventes.map((v) => (
+                          <Link
+                            key={v.id}
+                            href="/ventes"
+                            className="inline-flex items-center text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20 transition-colors"
+                          >
+                            @{v.pseudoAcheteur}
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Expanded event timeline inside card */}
+                  {isExpanded && (
+                    <div className="border-t border-zinc-900/60 pt-4 bg-zinc-900/10 -mx-4 px-4 pb-1">
+                      <div className="mb-3 flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-blue-400" />
+                        <span className="text-xs font-extrabold text-zinc-300 uppercase tracking-wider">
+                          Historique des événements
+                        </span>
+                      </div>
+                      <EventTimeline events={parcel.events} />
+                      {parcel.estimatedDelivery && (
+                        <div className="mt-4 flex items-center gap-2 text-xs font-medium text-zinc-500">
+                          <Clock className="w-3.5 h-3.5 text-blue-400" />
+                          Livraison estimée :{" "}
+                          <span className="font-bold text-blue-300">
+                            {formatDate(parcel.estimatedDelivery)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions buttons */}
+                  <div className="border-t border-zinc-900 pt-3 flex justify-end gap-2">
+                    <button
+                      onClick={() => openEditModal(parcel)}
+                      className="p-2 rounded-xl text-zinc-400 hover:text-amber-400 hover:bg-amber-500/10 border border-zinc-800 hover:border-amber-500/20 transition-all cursor-pointer"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleSyncOne(parcel.id)}
+                      disabled={syncingId === parcel.id}
+                      className="p-2 rounded-xl text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 border border-zinc-800 hover:border-blue-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      <RefreshCw className={cn("w-4 h-4", syncingId === parcel.id && "animate-spin")} />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(parcel.id)}
+                      disabled={deletingId === parcel.id}
+                      className="p-2 rounded-xl text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 border border-zinc-800 hover:border-rose-500/20 transition-all disabled:opacity-50 cursor-pointer"
+                    >
+                      {deletingId === parcel.id ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )
+            })
+          )}
         </div>
       </div>
 

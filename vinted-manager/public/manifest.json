@@ -1,0 +1,18 @@
+{
+  "theme_color": "#0c0c0e",
+  "background_color": "#0c0c0e",
+  "display": "standalone",
+  "scope": "/",
+  "start_url": "/",
+  "name": "Vinted Manager",
+  "short_name": "VintedMgr",
+  "description": "Plateforme centrale de gestion automatisée de commandes Vinted.",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

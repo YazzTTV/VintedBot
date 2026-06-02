@@ -164,9 +164,9 @@ Merci ! 💪`
   }
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-7xl mx-auto w-full min-h-full">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-7xl mx-auto w-full min-h-full">
       
-      <header className="flex items-center justify-between">
+      <header className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold text-white tracking-tight flex items-center gap-3">
             <Truck className="text-blue-500 w-8 h-8" />

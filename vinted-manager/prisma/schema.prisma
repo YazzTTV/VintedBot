@@ -148,6 +148,7 @@ model BotAccount {
   metrics           VintedItemMetrics[]
   actions           BotActionQueue[]
   ventes            Vente[]
+  logs              ExtensionLog[]
 }
 
 model VintedOrderSynced {
@@ -284,5 +285,15 @@ model ParcelEvent {
   stage       String?
 
   createdAt   DateTime       @default(now())
+}
+
+model ExtensionLog {
+  id           String      @id @default(uuid())
+  botAccountId String?
+  botAccount   BotAccount? @relation(fields: [botAccountId], references: [id], onDelete: Cascade)
+  botName      String      // Fallback si le botAccount n'est pas encore lié (ex: "lena", "system")
+  message      String      @db.Text
+  type         String      @default("INFO") // INFO, SUCCESS, WARNING, ERROR, ACTION
+  createdAt    DateTime    @default(now())
 }
 

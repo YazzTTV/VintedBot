@@ -24,7 +24,7 @@ USER_DATA_DIR  = r"D:\AntiGravity\02 Projects\Business Vinted\vinted_bot\Bot_Pro
 AVATAR_PATH    = r"D:\AntiGravity\02 Projects\Business Vinted\vinted_bot\avatar.jpg"
 PRODUCT_PATH   = AVATAR_PATH  # Pour le test, on utilise l'avatar comme produit aussi
 
-PLUS_SELECTOR  = 'button[aria-label="Ouvrir le menu \\"Importer un fichier\\""]'
+PLUS_SELECTOR  = 'button[aria-label="Importation et outils"]'
 LOCAL_FILES_SELECTORS = [
     '[data-test-id="local-images-files-uploader-button"]',
     'button[aria-label*="Importer des fichiers" i]',

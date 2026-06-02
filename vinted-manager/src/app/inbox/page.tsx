@@ -14,7 +14,8 @@ import {
   Clock,
   DollarSign,
   AlertCircle,
-  ArrowRightLeft
+  ArrowRightLeft,
+  ArrowLeft
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -45,6 +46,7 @@ export default function InboxPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedConvId, setSelectedConvId] = useState<string | null>(null)
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>("ALL")
+  const [mobileActiveView, setMobileActiveView] = useState<"list" | "chat">("list")
   
   // Formulaires de réponse et de contre-offre
   const [replyText, setReplyText] = useState("")
@@ -197,19 +199,19 @@ export default function InboxPage() {
       <div className="absolute bottom-[-5%] left-[10%] w-[35%] h-[35%] bg-indigo-600/5 blur-[120px] rounded-full pointer-events-none -z-10" />
 
       {/* Top Header */}
-      <header className="h-16 border-b border-zinc-800/50 flex items-center justify-between px-6 backdrop-blur-md flex-shrink-0 bg-zinc-950/40 relative z-20">
+      <header className="h-auto md:h-16 border-b border-zinc-800/50 flex flex-col md:flex-row md:items-center justify-between p-4 md:px-6 gap-3 backdrop-blur-md flex-shrink-0 bg-zinc-950/40 relative z-20">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center shadow-[0_0_15px_rgba(99,102,241,0.1)]">
             <MessageSquare className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">Inbox Omnicanal</h1>
-            <p className="text-[11px] text-zinc-500">Messagerie centralisée multi-comptes</p>
+            <h1 className="text-base md:text-lg font-bold text-white tracking-tight">Inbox Omnicanal</h1>
+            <p className="text-[10px] md:text-[11px] text-zinc-500">Messagerie centralisée multi-comptes</p>
           </div>
         </div>
 
         {/* Onglets des comptes */}
-        <div className="flex items-center gap-1.5 bg-zinc-900/40 p-1 rounded-xl border border-zinc-800/60 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-1.5 bg-zinc-900/40 p-1 rounded-xl border border-zinc-800/60 overflow-x-auto no-scrollbar w-full md:w-auto">
           <button 
             onClick={() => setSelectedAccountFilter("ALL")}
             className={cn(
@@ -246,7 +248,10 @@ export default function InboxPage() {
       <div className="flex flex-1 overflow-hidden relative z-10">
         
         {/* ------------------ MASTER PANEL : THREAD LIST ------------------ */}
-        <div className="w-80 md:w-96 border-r border-zinc-800/50 flex flex-col flex-shrink-0 bg-zinc-950/20 backdrop-blur-sm h-full">
+        <div className={cn(
+          "w-full md:w-96 border-r border-zinc-800/50 flex flex-col flex-shrink-0 bg-zinc-950/20 backdrop-blur-sm h-full",
+          mobileActiveView === "chat" ? "hidden md:flex" : "flex"
+        )}>
           
           {/* Search in Inbox */}
           <div className="p-4 border-b border-zinc-800/40">
@@ -282,7 +287,10 @@ export default function InboxPage() {
                 return (
                   <button
                     key={conv.id}
-                    onClick={() => setSelectedConvId(conv.id)}
+                    onClick={() => {
+                      setSelectedConvId(conv.id)
+                      setMobileActiveView("chat")
+                    }}
                     className={cn(
                       "w-full flex items-start gap-3 p-4 text-left transition-all relative group cursor-pointer",
                       isActive 
@@ -348,13 +356,23 @@ export default function InboxPage() {
         </div>
 
         {/* ------------------ DETAIL PANEL : ACTIVE CHAT WINDOW ------------------ */}
-        <div className="flex-1 flex flex-col h-full bg-zinc-950/30">
+        <div className={cn(
+          "flex-1 flex flex-col h-full bg-zinc-950/30",
+          mobileActiveView === "list" ? "hidden md:flex" : "flex"
+        )}>
           
           {activeConv ? (
             <>
               {/* Active Chat Top Bar */}
-              <div className="h-16 border-b border-zinc-800/50 flex items-center justify-between px-6 flex-shrink-0 backdrop-blur-sm bg-zinc-950/20">
-                <div className="flex items-center gap-3 min-w-0">
+              <div className="h-16 border-b border-zinc-800/50 flex items-center justify-between px-4 md:px-6 flex-shrink-0 backdrop-blur-sm bg-zinc-950/20">
+                <div className="flex items-center gap-2 md:gap-3 min-w-0">
+                  {/* Bouton Retour Mobile */}
+                  <button
+                    onClick={() => setMobileActiveView("list")}
+                    className="md:hidden p-2 -ml-1 bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white rounded-xl mr-1 cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
                   <div className="flex flex-col">
                     <div className="flex items-center gap-2">
                       <span className="font-extrabold text-white text-sm">@{activeConv.buyerUsername}</span>

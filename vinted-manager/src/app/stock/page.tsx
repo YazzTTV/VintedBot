@@ -177,7 +177,7 @@ export default function StockPage() {
   }
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-7xl mx-auto w-full min-h-full relative">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-7xl mx-auto w-full min-h-full relative">
       
       {/* Ambient background gradients specific to this page */}
       <div className="fixed top-0 right-0 w-[50%] h-[50%] bg-blue-500/5 blur-[120px] pointer-events-none rounded-full -z-10"></div>
@@ -250,7 +250,7 @@ export default function StockPage() {
 
       {/* Main Responsive Table */}
       <div className="bg-zinc-950 border border-zinc-800/60 rounded-2xl shadow-2xl shadow-black/50 backdrop-blur-md flex-1 flex flex-col relative">
-        <div className="overflow-x-auto w-full pb-28 min-h-[320px]">
+        <div className="hidden md:block overflow-x-auto w-full pb-28 min-h-[320px]">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-zinc-900/50 text-zinc-400 text-xs font-bold tracking-wider uppercase border-b border-zinc-800">
@@ -434,6 +434,171 @@ export default function StockPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Grille de cartes pour mobile */}
+        <div className="grid grid-cols-1 gap-4 p-4 md:hidden pb-28">
+          {loading ? (
+            <div className="py-16 text-center text-zinc-500">
+              <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-emerald-500" /> Chargement du stock...
+            </div>
+          ) : filteredArticles.length === 0 ? (
+            <div className="py-16 text-center text-zinc-500 text-xs">
+              Aucun article trouvé.
+            </div>
+          ) : (
+            filteredArticles.map((art: any) => {
+              const totalCost = (Number(art.prixAchatUnitaire) + Number(art.fraisPortUnitaires)).toFixed(2)
+              const isSold = art.statut === 'VENDU'
+
+              return (
+                <div 
+                  key={art.id}
+                  className="p-4 rounded-2xl border border-zinc-850 bg-zinc-950/40 backdrop-blur-sm relative flex flex-col gap-4 shadow-md group"
+                >
+                  <div className="flex gap-4">
+                    {/* Visual */}
+                    <div className="w-16 h-20 rounded-lg bg-zinc-900 border border-zinc-800 overflow-hidden flex items-center justify-center relative shrink-0">
+                      {art.photoUrl ? (
+                        <img src={art.photoUrl} alt={art.nom} className="w-full h-full object-cover" />
+                      ) : (
+                        <Package className="w-5 h-5 text-zinc-600" />
+                      )}
+                    </div>
+
+                    {/* Details */}
+                    <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
+                      <div>
+                        <div className="font-mono text-[9px] text-zinc-500">
+                          #{art.id.slice(0, 8)}
+                        </div>
+                        <h3 className="font-bold text-white text-sm tracking-tight flex items-center gap-1.5 mt-0.5">
+                          <span className="truncate">{art.nom || "Article Standard"}</span>
+                          {art.lienProduit && (
+                            <a href={art.lienProduit} target="_blank" rel="noopener noreferrer" className="text-zinc-500 hover:text-zinc-300 inline-block shrink-0">
+                              <ExternalLink className="w-3.5 h-3.5" />
+                            </a>
+                          )}
+                        </h3>
+                        <div className="text-[9px] text-zinc-500 mt-1">
+                          Ajouté le {new Date(art.dateAjoutStock).toLocaleDateString()}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Aliases if any */}
+                  {art.aliases && art.aliases.length > 0 && (
+                    <div className="flex flex-wrap gap-1 items-center">
+                      <span className="text-[9px] text-emerald-500/70 font-black uppercase tracking-wider">Synonymes :</span>
+                      {art.aliases.map((alias: string, i: number) => (
+                        <span key={i} className="text-[10px] text-zinc-400 bg-zinc-900 border border-zinc-850 px-1.5 py-0.5 rounded-md font-medium truncate max-w-[150px]">
+                          {alias}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Financials & Status */}
+                  <div className="grid grid-cols-2 gap-2 bg-zinc-900/40 p-2.5 rounded-xl border border-zinc-900 text-xs">
+                    <div className="flex flex-col gap-0.5 items-center justify-center py-1">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Origine</span>
+                      <span className="font-bold text-zinc-300 truncate max-w-[120px]">{art.commande.fournisseur} <span className="font-mono font-medium text-[10px] text-zinc-400">({art.commande.numero})</span></span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 items-center justify-center py-1 border-l border-zinc-900">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Coût Achat</span>
+                      <span className="font-extrabold text-zinc-300">{totalCost} €</span>
+                    </div>
+                  </div>
+
+                  {/* Status & Actions */}
+                  <div className="flex items-center justify-between border-t border-zinc-900 pt-3">
+                    <div>
+                      {isSold ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-semibold">
+                          VENDU
+                        </span>
+                      ) : art.statut === 'EN_TRANSIT' ? (() => {
+                        const isLate = art.commande?.dateArriveeEstimee && (new Date(art.commande.dateArriveeEstimee) < new Date())
+                        return isLate ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-red-500/10 text-red-400 border border-red-500/20 text-xs font-extrabold shadow-[0_0_8px_rgba(239,68,68,0.1)]">
+                            🚨 RETARD
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 text-xs font-semibold">
+                            EN TRANSIT
+                          </span>
+                        )
+                      })() : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-semibold">
+                          EN STOCK
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {isSold ? (
+                        <div className="flex flex-col items-end text-right">
+                          <span className="text-xs font-bold text-zinc-200">{Number(art.vente?.prixVente).toFixed(2)} €</span>
+                          <span className="text-[10px] text-emerald-400 font-bold">+{Number(art.vente?.beneficeNet).toFixed(2)}€ net</span>
+                        </div>
+                      ) : art.statut === 'EN_TRANSIT' ? (
+                        <span className="text-[10px] text-zinc-500 italic">Attente livraison</span>
+                      ) : (
+                        <button 
+                          type="button"
+                          onClick={() => setSelectedArticle(art)}
+                          className="inline-flex items-center gap-1.5 bg-white text-black px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-zinc-200 transition-all shadow-sm cursor-pointer"
+                        >
+                          <Tag className="w-3 h-3" /> Vendre
+                        </button>
+                      )}
+
+                      {/* Menu Contextuel */}
+                      <div className="relative">
+                        <button 
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setOpenPopoverId(openPopoverId === art.id ? null : art.id)
+                          }}
+                          className="p-1.5 hover:bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-500 hover:text-white transition-all cursor-pointer"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+
+                        {openPopoverId === art.id && (
+                          <>
+                            <div className="fixed inset-0 z-20" onClick={() => setOpenPopoverId(null)} />
+                            <div className="absolute right-0 bottom-full mb-2 w-48 bg-zinc-950 border border-zinc-850 p-1.5 shadow-2xl rounded-xl z-30 animate-in slide-in-from-bottom-2 duration-150 flex flex-col gap-0.5 text-left">
+                              <button 
+                                type="button"
+                                onClick={() => handleOpenEditArticle(art)}
+                                className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5 text-amber-500" /> Modifier l'article
+                              </button>
+                              <div className="h-px bg-zinc-900 my-1 w-[90%] mx-auto" />
+                              <button 
+                                type="button"
+                                onClick={() => {
+                                  setOpenPopoverId(null)
+                                  setArticleToDelete(art)
+                                }}
+                                className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-500" /> Supprimer l'article
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
         </div>
       </div>
 

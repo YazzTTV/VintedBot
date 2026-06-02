@@ -83,10 +83,10 @@ export default function SourcingPage() {
   }
 
   return (
-    <div className="p-8 max-w-7xl mx-auto flex flex-col min-h-screen gap-8">
+    <div className="p-4 md:p-8 max-w-7xl mx-auto flex flex-col min-h-screen gap-4 md:gap-8">
       
       {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-zinc-900 pb-6">
+      <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-zinc-900 pb-4 md:pb-6">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <div className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] font-black tracking-wider text-emerald-400 uppercase animate-pulse flex items-center gap-1">

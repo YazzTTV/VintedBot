@@ -325,7 +325,7 @@ export default function VentesPage() {
   const avgMargin = filteredVentes.length > 0 ? filteredVentes.reduce((sum, v: any) => sum + Number(v.margePct), 0) / filteredVentes.length : 0
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-7xl mx-auto w-full min-h-full">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-7xl mx-auto w-full min-h-full">
       
       {/* Subtle radiant backdrop */}
       <div className="fixed top-0 right-0 w-[40%] h-[40%] bg-emerald-500/5 blur-[150px] -z-10 rounded-full pointer-events-none" />
@@ -340,20 +340,20 @@ export default function VentesPage() {
           <p className="text-zinc-400 mt-1 text-sm">Registre officiel de vos transactions et de votre rentabilité nette.</p>
         </div>
 
-        <div className="flex items-center gap-3 bg-zinc-900/50 border border-zinc-800 rounded-2xl p-2 backdrop-blur-md">
-           <div className="px-4 py-2 text-center">
-             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total C.A.</p>
-             <p className="text-lg font-extrabold text-white">{totalRev.toFixed(2)} €</p>
+        <div className="grid grid-cols-3 gap-2 bg-zinc-900/50 border border-zinc-800 rounded-2xl p-2 backdrop-blur-md w-full md:w-auto md:flex md:items-center">
+           <div className="px-2 md:px-4 py-2 text-center">
+             <p className="text-[9px] md:text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Total C.A.</p>
+             <p className="text-sm md:text-lg font-extrabold text-white">{totalRev.toFixed(2)} €</p>
            </div>
-           <div className="w-px h-8 bg-zinc-800"></div>
-           <div className="px-4 py-2 text-center">
-             <p className="text-[10px] font-bold text-emerald-500/80 uppercase tracking-wider">Profit Net</p>
-             <p className="text-lg font-extrabold text-emerald-400">{totalProf.toFixed(2)} €</p>
+           <div className="hidden md:block w-px h-8 bg-zinc-800"></div>
+           <div className="px-2 md:px-4 py-2 text-center border-l border-zinc-800 md:border-l-0">
+             <p className="text-[9px] md:text-[10px] font-bold text-emerald-500/80 uppercase tracking-wider">Profit Net</p>
+             <p className="text-sm md:text-lg font-extrabold text-emerald-400">{totalProf.toFixed(2)} €</p>
            </div>
-           <div className="w-px h-8 bg-zinc-800"></div>
-           <div className="px-4 py-2 text-center">
-             <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Marge Moy.</p>
-             <p className="text-lg font-extrabold text-zinc-300">{Math.round(avgMargin)}%</p>
+           <div className="hidden md:block w-px h-8 bg-zinc-800"></div>
+           <div className="px-2 md:px-4 py-2 text-center border-l border-zinc-800 md:border-l-0">
+             <p className="text-[9px] md:text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Marge Moy.</p>
+             <p className="text-sm md:text-lg font-extrabold text-zinc-300">{Math.round(avgMargin)}%</p>
            </div>
         </div>
       </div>
@@ -492,7 +492,7 @@ export default function VentesPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto w-full pb-28 min-h-[320px]">
+        <div className="hidden md:block overflow-x-auto w-full pb-28 min-h-[320px]">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="text-xs font-bold text-zinc-500 tracking-wider uppercase border-b border-zinc-900">
@@ -749,6 +749,215 @@ export default function VentesPage() {
               )}
             </tbody>
           </table>
+        </div>
+
+        {/* Grille de cartes pour mobile */}
+        <div className="grid grid-cols-1 gap-4 p-4 md:hidden pb-28">
+          {loading ? (
+            <div className="py-16 text-center text-zinc-500">
+              <Loader2 className="w-8 h-8 animate-spin mx-auto mb-3 opacity-50" />
+              Chargement des transactions...
+            </div>
+          ) : filteredVentes.length === 0 ? (
+            <div className="py-16 text-center text-zinc-500">
+              <DollarSign className="w-10 h-10 mx-auto mb-2 opacity-20" />
+              Aucune vente enregistrée.
+            </div>
+          ) : (
+            filteredVentes.map((v: any) => {
+              const limitDate = v.dateLimiteExpedition 
+                ? new Date(v.dateLimiteExpedition) 
+                : addWorkingDays(new Date(v.dateVente), 5);
+              
+              const now = new Date();
+              const diffDays = getWorkingDaysDifference(now, limitDate);
+              
+              let deadlineLabel = `J-${diffDays}`;
+              let deadlineStyle = "text-zinc-400 bg-zinc-900 border border-zinc-800/50";
+              if (diffDays < 0) {
+                deadlineStyle = "text-rose-400 bg-rose-500/10 border border-rose-500/20 font-black animate-pulse";
+                deadlineLabel = "RETARD !";
+              } else if (diffDays === 0) {
+                deadlineStyle = "text-rose-400 bg-rose-500/10 border border-rose-500/20 font-black animate-pulse";
+                deadlineLabel = "AUJOURD'HUI";
+              } else if (diffDays === 1 || diffDays === 2) {
+                deadlineStyle = "text-orange-400 bg-orange-500/10 border border-orange-500/20 font-bold";
+              } else if (diffDays >= 3) {
+                deadlineStyle = "text-amber-500/80 bg-amber-500/5 border border-amber-500/10 font-semibold";
+              }
+
+              return (
+                <div 
+                  key={v.id}
+                  className="p-4 rounded-2xl border border-zinc-850 bg-zinc-950/40 backdrop-blur-sm relative flex flex-col gap-4 shadow-md group"
+                >
+                  <div className="flex gap-4">
+                    {/* Visual */}
+                    <div className="w-16 h-20 rounded-lg bg-zinc-900 border border-zinc-800 overflow-hidden flex items-center justify-center relative shrink-0">
+                      {v.photoUrl ? (
+                        <img src={v.photoUrl} alt={v.article?.nom} className="w-full h-full object-cover" />
+                      ) : (
+                        <DollarSign className="w-6 h-6 text-zinc-700" />
+                      )}
+                    </div>
+
+                    {/* Details */}
+                    <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
+                      <div>
+                        <div className="flex items-center gap-1.5 justify-between">
+                          <span className="font-bold text-white text-sm truncate">@{v.pseudoAcheteur}</span>
+                          {v.botAccount && (
+                            <span className="text-[8px] font-black uppercase text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 shrink-0">
+                              {v.botAccount.name}
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-white text-xs truncate font-medium mt-1">
+                          {v.article?.nom || "Article Standard"}
+                        </h3>
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <span className="text-[9px] font-black uppercase text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800/50">
+                            {v.article?.commande?.fournisseur || 'N/A'}
+                          </span>
+                          <span className="text-[9px] text-zinc-500 font-mono">#{v.article?.id?.slice(0, 8)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Financial Metrics */}
+                  <div className="grid grid-cols-3 gap-2 bg-zinc-900/40 p-2.5 rounded-xl border border-zinc-900 text-center text-xs">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Prix Brut</span>
+                      <span className="font-extrabold text-zinc-200">{Number(v.prixVente).toFixed(2)} €</span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 border-l border-zinc-900">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Bénéfice</span>
+                      <span className="font-extrabold text-emerald-400">+{Number(v.beneficeNet).toFixed(2)} €</span>
+                    </div>
+                    <div className="flex flex-col gap-0.5 border-l border-zinc-900">
+                      <span className="text-[9px] text-zinc-500 uppercase font-bold">Marge</span>
+                      <span className="font-extrabold text-zinc-300">{Math.round(Number(v.margePct))}%</span>
+                    </div>
+                  </div>
+
+                  {/* Status / Deadline / Actions */}
+                  <div className="flex items-center justify-between border-t border-zinc-900 pt-3 text-xs">
+                    <div className="flex flex-col gap-1">
+                      <div>
+                        {v.statut === 'EXPEDIEE' ? (
+                          <span className="text-[9px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full uppercase tracking-widest">
+                            Expédiée
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full uppercase tracking-widest">
+                            À envoyer
+                          </span>
+                        )}
+                      </div>
+                      <div>
+                        {v.statut !== 'EXPEDIEE' && (
+                          <span className={cn("text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1 tracking-wider uppercase w-fit", deadlineStyle)}>
+                            <Clock className="w-2.5 h-2.5" />
+                            {deadlineLabel}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {v.lienVente && (
+                        <a 
+                          href={v.lienVente} 
+                          target="_blank" 
+                          rel="noreferrer" 
+                          className="p-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white rounded-lg border border-zinc-800 cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+
+                      {/* Menu Contextuel */}
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setOpenPopoverId(openPopoverId === v.id ? null : v.id)
+                          }}
+                          className="p-1.5 hover:bg-zinc-900 border border-zinc-850 rounded-lg text-zinc-500 hover:text-white transition-all cursor-pointer"
+                        >
+                          <MoreVertical className="w-4 h-4" />
+                        </button>
+
+                        {openPopoverId === v.id && (
+                          <>
+                            <div className="fixed inset-0 z-20" onClick={() => setOpenPopoverId(null)} />
+                            <div className="absolute right-0 bottom-full mb-2 w-48 bg-zinc-950/95 border border-zinc-800/60 backdrop-blur-md shadow-2xl rounded-xl p-1.5 z-30 animate-in slide-in-from-bottom-2 duration-150 flex flex-col gap-0.5 text-left">
+                              <button 
+                                type="button"
+                                onClick={() => handleToggleStatus(v.id, v.statut)}
+                                className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Truck className="w-3.5 h-3.5 text-teal-500" /> 
+                                {v.statut === 'EXPEDIEE' ? 'Marquer À Envoyer' : 'Marquer Expédiée'}
+                              </button>
+
+                              {v.statut === 'EN_ATTENTE' && (
+                                <>
+                                  {v.extensionStatut === 'AUCUNE' && (
+                                    <button 
+                                      type="button"
+                                      onClick={() => handleUpdateExtension(v.id, 'DEMANDEE')}
+                                      className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-teal-400 hover:text-white hover:bg-teal-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                    >
+                                      <Clock className="w-3.5 h-3.5" /> 
+                                      Demander Allongement (+5j)
+                                    </button>
+                                  )}
+                                  {v.extensionStatut === 'DEMANDEE' && (
+                                    <button 
+                                      type="button"
+                                      onClick={() => handleUpdateExtension(v.id, 'ACCEPTEE')}
+                                      className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-black text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> 
+                                      Confirmer Allongement
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              <button 
+                                type="button"
+                                onClick={() => handleOpenEditModal(v)}
+                                className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-300 hover:text-white hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5 text-amber-500" /> Modifier la vente
+                              </button>
+
+                              <div className="h-px bg-zinc-900 my-1 w-[90%] mx-auto" />
+
+                              <button 
+                                type="button"
+                                onClick={() => {
+                                  setOpenPopoverId(null)
+                                  setVenteToDelete(v)
+                                }}
+                                className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-500" /> Supprimer la vente
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            })
+          )}
         </div>
 
       </div>

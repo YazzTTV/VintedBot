@@ -1,9 +1,31 @@
-import time
 import os
-from playwright.sync_api import sync_playwright
+import re
+import time
+import random
+import asyncio
+from playwright.async_api import async_playwright
 from edge_browser import start_edge, CDP_URL
 from PIL import Image
 from humanizer import humanize_image
+from image_generator import crop_black_borders
+
+class AsyncLockWrapper:
+    def __init__(self, lock, page):
+        self.lock = lock
+        self.page = page
+    async def __aenter__(self):
+        if self.lock:
+            await self.lock.acquire()
+            try:
+                print(f"[ChatGPT Async] Focus de l'onglet actif...")
+                await self.page.bring_to_front()
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"[ChatGPT Async] Focus echec : {e}")
+        return self
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.lock:
+            self.lock.release()
 
 def strip_metadata(image_path: str):
     """
@@ -16,532 +38,494 @@ def strip_metadata(image_path: str):
         if not os.path.exists(image_path):
             return False
             
-        # 1. Ouvrir et forcer en RGB pur (supprime canal alpha et métadonnées PIL)
         with Image.open(image_path) as img:
             rgb_img = img.convert("RGB")
-            
-            # 2. Transférer vers une matrice NUMPY (extraction des PIXELS BRUTS mathématiques)
-            # ICI, TOUTES LES MÉTADONNÉES D'ORIGINE SONT DÉTRUITES.
             pixel_data = np.array(rgb_img)
             
-        # 3. Reconstruire une NOUVELLE image à partir des chiffres purs
         sterile_img = Image.fromarray(pixel_data)
-        
-        # 4. Écraser le fichier en JPEG nu temporaire
         sterile_img.save(image_path, "JPEG", quality=95, optimize=True, exif=b"", icc_profile=None)
         
-        # 5. Enrichissement Humain : Réinjection d'EXIF iPhone réalistes (sans rotation ici)
         humanize_image(image_path, image_path, apply_transform=False)
-        
         print(f"[Cleaner] [SUCCÈS ATOMIQUE] Purge C2PA + Injection EXIF Humain réussie pour {os.path.basename(image_path)}.")
         return True
     except Exception as e:
         print(f"[Cleaner] [ALERTE] Echec de la purge atomique enrichie : {e}")
         return False
 
-def upscale_image_with_chatgpt(input_path: str, output_path: str, max_attempts: int = 2) -> bool:
-    """
-    Automate ChatGPT pour ameliorer la qualite d'une image, avec essais multiples en cas de timeout/echec.
-    """
-    print(f"[ChatGPT] Tentative d'upscaling pour : {input_path}")
-    
-    if not os.path.exists(input_path):
-        print(f"[ChatGPT] ERREUR : Fichier source introuvable : {input_path}")
-        return False
-
-    # S'assurer que Edge est lance avec CDP
-    if not start_edge():
-        print("[ChatGPT] ERREUR : Impossible de demarrer Edge.")
-        return False
-
+async def _save_chatgpt_image_async(page, target_img, output_path: str) -> bool:
     try:
-        with sync_playwright() as p:
-            # Connexion au navigateur deja ouvert
-            browser = p.chromium.connect_over_cdp(CDP_URL)
-            context = browser.contexts[0]
-            
-            for attempt in range(1, max_attempts + 1):
-                if attempt > 1:
-                    print(f"\n[ChatGPT] [RETRY] Lancement de la tentative {attempt}/{max_attempts} suite à un echec...")
-                else:
-                    print(f"[ChatGPT] Lancement de la tentative {attempt}/{max_attempts}...")
-                
-                page = context.new_page()
-                try:
-                    print("[ChatGPT] Navigation vers ChatGPT...")
-                    page.goto("https://chatgpt.com", timeout=60000)
-                    time.sleep(3) # Laisser un peu de temps pour le chargement
-                    
-                    # Upload de l'image sur le bon input qui accepte les images
-                    print("[ChatGPT] Upload de l'image...")
-                    file_input = page.locator("input[type=file][accept*='image']").first
-                    file_input.set_input_files(input_path)
-                    
-                    # Attente de l'upload (5 secondes comme demande)
-                    time.sleep(5)
-                    
-                    # Prompt pour l'upscale
-                    print("[ChatGPT] Envoi du prompt d'upscale...")
-                    prompt_textarea = page.locator("#prompt-textarea")
-                    prompt_textarea.fill("Upscale and upgrade quality")
-                    
-                    # Attente que le bouton d'envoi soit actif (upload fini)
-                    send_button = page.locator('button[data-testid="send-button"]')
-                    try:
-                        send_button.wait_for(state="visible", timeout=10000)
-                        send_button.click()
-                        time.sleep(2) # Laisser ChatGPT traiter le clic
-                    except Exception as e:
-                        print(f"[ChatGPT] [WARN] Bouton d'envoi non detecte ou inactif : {e}")
-                        prompt_textarea.press("Enter")
-                    
-                    # Attente de la generation avec boucle robuste (augmentation du timeout à 180s)
-                    timeout = 180
-                    print(f"[ChatGPT] Attente de la generation de l'image (max {timeout}s)...")
-                    start_time = time.time()
-                    target_img = None
-                    
-                    while time.time() - start_time < timeout:
-                        # 1. Verifier si un indicateur de chargement est actif (stop-button visible = generation en cours)
-                        is_loading = page.locator("[data-testid='stop-button']").is_visible()
-                        loading_texts = ["On peaufine", "Refining", "details", "Details"]
-                        
-                        if not is_loading:
-                            for text in loading_texts:
-                                try:
-                                    if page.get_by_text(text, exact=False).first.is_visible():
-                                        is_loading = True
-                                        break
-                                except:
-                                    pass
-                        
-                        # 2. Chercher directement l'image de grande taille genere sur la page
-                        images = page.locator("img").all()
-                        for img in images:
-                            try:
-                                box = img.bounding_box()
-                                if box and box['width'] > 300 and box['height'] > 300:
-                                    if not is_loading:
-                                        target_img = img
-                                        break
-                            except:
-                                pass
-                        
-                        if target_img:
-                            break
-                        
-                        time.sleep(2)
-        
-                    if target_img:
-                        print(f"[ChatGPT] [OK] Image finale prete ! Extraction du lien direct...")
-                        img_url = target_img.get_attribute("src")
-                        print(f"[ChatGPT] Telechargement de l'image d'origine de haute qualite...")
-                        
-                        try:
-                            import base64
-                            base64_data = page.evaluate("""async (url) => {
-                                const response = await fetch(url);
-                                const blob = await response.blob();
-                                return new Promise((resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-                                    reader.onerror = reject;
-                                    reader.readAsDataURL(blob);
-                                });
-                            }""", img_url)
-                            
-                            with open(output_path, "wb") as f:
-                                f.write(base64.b64decode(base64_data))
-                            print("[ChatGPT] [OK] Image d'origine telechargee avec succes sans aucune superposition.")
-                            
-                            # --- NETTOYAGE DES MÉTADONNÉES AI ---
-                            strip_metadata(output_path)
-                            
-                            page.close()
-                            return True
-                        except Exception as fetch_err:
-                            print(f"[ChatGPT] [WARN] Echec du telechargement direct : {fetch_err}. Capture de secours.")
-                            # Masquer l'interface ChatGPT pour éviter les superpositions d'éléments de chat
-                            try:
-                                page.evaluate("""() => {
-                                    const selectors = [
-                                        '.input-area-container', '.input-area', 'gmat-input-field', 'rich-textarea', 
-                                        'header', '.sidebar', '.chat-input-container', 'div[class*="input" i]', 'div[class*="composer" i]', 'form'
-                                    ];
-                                    selectors.forEach(sel => {
-                                        document.querySelectorAll(sel).forEach(el => el.style.setProperty('display', 'none', 'important'));
-                                    });
-                                }""")
-                                time.sleep(0.5)
-                            except Exception:
-                                pass
-                                
-                            target_img.screenshot(path=output_path)
-                            
-                            # --- NETTOYAGE DES MÉTADONNÉES AI ---
-                            strip_metadata(output_path)
-                            
-                            page.close()
-                            return True
-                    else:
-                        print(f"[ChatGPT] [WARN] Tentative {attempt}/{max_attempts} : Timeout de {timeout}s atteint.")
-                        page.screenshot(path=f"debug_chatgpt_timeout_attempt_{attempt}.png", full_page=True)
-                        page.close()
-                        
-                except Exception as attempt_err:
-                    print(f"[ChatGPT] [WARN] Erreur lors de la tentative {attempt}/{max_attempts} : {attempt_err}")
-                    try:
-                        page.close()
-                    except:
-                        pass
-                        
-            # Si toutes les tentatives ont échoué
-            print("[ChatGPT] [ERROR] Toutes les tentatives d'upscaling ont echoue.")
+        img_url = await target_img.get_attribute("src")
+        if not img_url:
             return False
             
-    except Exception as e:
-        print(f"[ChatGPT] [ERROR] Erreur majeure lors de l'automatisation ChatGPT : {e}")
-        return False
-
-def generate_profile_with_chatgpt(input_path: str, output_path: str, max_attempts: int = 2) -> bool:
-    """
-    Automate ChatGPT pour générer une version de profil d'un selfie upscalé existant.
-    """
-    print(f"[ChatGPT] Génération de l'image de profil pour : {input_path}")
-    
-    if not os.path.exists(input_path):
-        print(f"[ChatGPT] ERREUR : Fichier source introuvable : {input_path}")
-        return False
-
-    # S'assurer que Edge est lance avec CDP
-    if not start_edge():
-        print("[ChatGPT] ERREUR : Impossible de demarrer Edge.")
-        return False
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
-            context = browser.contexts[0]
+        import base64
+        try:
+            base64_data = await page.evaluate("""async (url) => {
+                const response = await fetch(url);
+                const blob = await response.blob();
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                });
+            }""", img_url)
+            with open(output_path, "wb") as f:
+                f.write(base64.b64decode(base64_data))
+            return True
+        except Exception as e:
+            print(f"[ChatGPT Async] Téléchargement direct échoué : {e}. Screenshot fallback.")
             
-            for attempt in range(1, max_attempts + 1):
-                if attempt > 1:
-                    print(f"\n[ChatGPT] [RETRY] Lancement de la tentative {attempt}/{max_attempts} suite à un echec...")
-                else:
-                    print(f"[ChatGPT] Lancement de la tentative {attempt}/{max_attempts}...")
-                
-                page = context.new_page()
-                try:
-                    print("[ChatGPT] Navigation vers ChatGPT...")
-                    page.goto("https://chatgpt.com", timeout=60000)
-                    time.sleep(3)
-                    
-                    print("[ChatGPT] Upload de l'image...")
-                    file_input = page.locator("input[type=file][accept*='image']").first
-                    file_input.set_input_files(input_path)
-                    
-                    # Attente de l'upload (5 secondes comme demande)
-                    time.sleep(5)
-                    
-                    # Prompt pour la version de profil
-                    print("[ChatGPT] Envoi du prompt de version de profil...")
-                    prompt_textarea = page.locator("#prompt-textarea")
-                    prompt_textarea.fill(
-                        "Fais une version de cette image sous forme de selfie dans le miroir où le modèle se montre plus de profil (vue de côté), sans qu'on voie le dos. "
-                        "Garde exactement la même personne, les mêmes cheveux, la même tenue (la même robe), le même téléphone et le même arrière-plan de la pièce."
-                    )
-                    
-                    # Attente que le bouton d'envoi soit actif (upload fini)
-                    send_button = page.locator('button[data-testid="send-button"]')
-                    try:
-                        send_button.wait_for(state="visible", timeout=10000)
-                        send_button.click()
-                        time.sleep(2)
-                    except Exception as e:
-                        print(f"[ChatGPT] [WARN] Bouton d'envoi non detecte ou inactif : {e}")
-                        prompt_textarea.press("Enter")
-                    
-                    # Attente de la generation (timeout 180s)
-                    timeout = 180
-                    print(f"[ChatGPT] Attente de la generation de l'image (max {timeout}s)...")
-                    start_time = time.time()
-                    target_img = None
-                    
-                    while time.time() - start_time < timeout:
-                        # 1. Verifier si la generation est en cours (stop-button visible)
-                        is_loading = page.locator("[data-testid='stop-button']").is_visible()
-                        loading_texts = ["On peaufine", "Refining", "details", "Details"]
-                        
-                        if not is_loading:
-                            for text in loading_texts:
-                                try:
-                                    if page.get_by_text(text, exact=False).first.is_visible():
-                                        is_loading = True
-                                        break
-                                except:
-                                    pass
-                        
-                        # 2. Chercher directement l'image de grande taille genere sur la page
-                        images = page.locator("img").all()
-                        for img in images:
-                            try:
-                                box = img.bounding_box()
-                                if box and box['width'] > 300 and box['height'] > 300:
-                                    if not is_loading:
-                                        target_img = img
-                                        break
-                            except:
-                                pass
-                        
-                        if target_img:
-                            break
-                        
-                        time.sleep(2)
+        await target_img.screenshot(path=output_path)
+        return True
+    except Exception as e:
+        print(f"[ChatGPT Async] Échec de la sauvegarde : {e}")
+        return False
+
+async def wait_for_chatgpt_image_async(page, timeout: int = 180):
+    start_time = time.time()
+    target_img = None
+    while time.time() - start_time < timeout:
+        is_loading = await page.locator("[data-testid='stop-button']").is_visible()
         
-                    if target_img:
-                        print(f"[ChatGPT] [OK] Image de profil prete ! Extraction du lien direct...")
-                        img_url = target_img.get_attribute("src")
-                        print(f"[ChatGPT] Telechargement de l'image...")
-                        
-                        try:
-                            import base64
-                            base64_data = page.evaluate("""async (url) => {
-                                const response = await fetch(url);
-                                const blob = await response.blob();
-                                return new Promise((resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-                                    reader.onerror = reject;
-                                    reader.readAsDataURL(blob);
-                                });
-                            }""", img_url)
-                            
-                            with open(output_path, "wb") as f:
-                                f.write(base64.b64decode(base64_data))
-                            print("[ChatGPT] [OK] Image de profil telechargee avec succes.")
-                            
-                            # --- NETTOYAGE DES MÉTADONNÉES AI ---
-                            strip_metadata(output_path)
-                            
-                            page.close()
-                            return True
-                        except Exception as fetch_err:
-                            print(f"[ChatGPT] [WARN] Echec du telechargement direct : {fetch_err}. Capture de secours.")
-                            try:
-                                page.evaluate("""() => {
-                                    const selectors = [
-                                        '.input-area-container', '.input-area', 'gmat-input-field', 'rich-textarea', 
-                                        'header', '.sidebar', '.chat-input-container', 'div[class*="input" i]', 'div[class*="composer" i]', 'form'
-                                    ];
-                                    selectors.forEach(sel => {
-                                        document.querySelectorAll(sel).forEach(el => el.style.setProperty('display', 'none', 'important'));
-                                    });
-                                }""")
-                                time.sleep(0.5)
-                            except Exception:
-                                pass
-                                
-                            target_img.screenshot(path=output_path)
-                            
-                            # --- NETTOYAGE DES MÉTADONNÉES AI ---
-                            strip_metadata(output_path)
-                            
-                            page.close()
-                            return True
-                    else:
-                        print(f"[ChatGPT] [WARN] Tentative {attempt}/{max_attempts} : Timeout de {timeout}s atteint.")
-                        page.screenshot(path=f"debug_chatgpt_timeout_attempt_{attempt}.png", full_page=True)
-                        page.close()
-                        
-                except Exception as attempt_err:
-                    print(f"[ChatGPT] [WARN] Erreur lors de la tentative {attempt}/{max_attempts} : {attempt_err}")
-                    try:
-                        page.close()
-                    except:
-                        pass
-                        
-            print("[ChatGPT] [ERROR] Toutes les tentatives de generation de profil ont echoue.")
-            return False
-            
-    except Exception as e:
-        print(f"[ChatGPT] [ERROR] Erreur majeure lors de l'automatisation ChatGPT : {e}")
-        return False
-
-def generate_hanger_with_chatgpt(original_image_path: str, hanger_template_path: str, output_path: str, max_attempts: int = 2) -> bool:
-    """
-    Automate ChatGPT pour faire un Clothes Swap réaliste sur cintre à partir de l'image originale
-    et du cintre de référence de l'utilisateur.
-    """
-    print(f"[ChatGPT] Génération de l'image sur cintre pour : {original_image_path} avec le gabarit {hanger_template_path}")
-    
-    if not os.path.exists(original_image_path):
-        print(f"[ChatGPT] ERREUR : Image originale introuvable : {original_image_path}")
-        return False
-    if not os.path.exists(hanger_template_path):
-        print(f"[ChatGPT] ERREUR : Gabarit cintre introuvable : {hanger_template_path}")
-        return False
-
-    # S'assurer que Edge est lance avec CDP
-    if not start_edge():
-        print("[ChatGPT] ERREUR : Impossible de demarrer Edge.")
-        return False
-
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.connect_over_cdp(CDP_URL)
-            context = browser.contexts[0]
-            
-            for attempt in range(1, max_attempts + 1):
-                if attempt > 1:
-                    print(f"\n[ChatGPT] [RETRY] Lancement de la tentative {attempt}/{max_attempts} suite à un echec...")
-                else:
-                    print(f"[ChatGPT] Lancement de la tentative {attempt}/{max_attempts}...")
-                
-                page = context.new_page()
+        loading_texts = ["On peaufine", "Refining", "details", "Details"]
+        if not is_loading:
+            for text in loading_texts:
                 try:
-                    print("[ChatGPT] Navigation vers ChatGPT...")
-                    page.goto("https://chatgpt.com", timeout=60000)
-                    time.sleep(3)
-                    
-                    print("[ChatGPT] Upload des deux images (produit + cintre)...")
-                    file_input = page.locator("input[type=file][accept*='image']").first
-                    file_input.set_input_files([original_image_path, hanger_template_path])
-                    
-                    # Attente de l'upload (5 secondes comme demande)
-                    time.sleep(5)
-                    
-                    # Prompt pour le swap cintre
-                    print("[ChatGPT] Envoi du prompt pour le Clothes Swap sur cintre...")
-                    prompt_textarea = page.locator("#prompt-textarea")
-                    prompt_textarea.fill(
-                        "Utilise les deux images fournies. La première image montre le vêtement cible à reproduire. "
-                        "La deuxième image est une image de référence montrant un cintre noir suspendu contre un mur blanc. "
-                        "Génère une photo réaliste du vêtement de la première image suspendu exactement sur le cintre noir de la deuxième image, "
-                        "contre le même mur blanc. Conserve fidèlement la coupe, la couleur, les motifs et la matière du vêtement."
-                    )
-                    
-                    # Attente que le bouton d'envoi soit actif (upload fini)
-                    send_button = page.locator('button[data-testid="send-button"]')
-                    try:
-                        send_button.wait_for(state="visible", timeout=10000)
-                        send_button.click()
-                        time.sleep(2)
-                    except Exception as e:
-                        print(f"[ChatGPT] [WARN] Bouton d'envoi non detecte ou inactif : {e}")
-                        prompt_textarea.press("Enter")
-                    
-                    # Attente de la generation (timeout 180s)
-                    timeout = 180
-                    print(f"[ChatGPT] Attente de la generation de l'image (max {timeout}s)...")
-                    start_time = time.time()
-                    target_img = None
-                    
-                    while time.time() - start_time < timeout:
-                        # 1. Verifier si la generation est en cours (stop-button visible)
-                        is_loading = page.locator("[data-testid='stop-button']").is_visible()
-                        loading_texts = ["On peaufine", "Refining", "details", "Details"]
-                        
-                        if not is_loading:
-                            for text in loading_texts:
-                                try:
-                                    if page.get_by_text(text, exact=False).first.is_visible():
-                                        is_loading = True
-                                        break
-                                except:
-                                    pass
-                        
-                        # 2. Chercher directement l'image de grande taille genere sur la page
-                        images = page.locator("img").all()
-                        for img in images:
-                            try:
-                                box = img.bounding_box()
-                                if box and box['width'] > 300 and box['height'] > 300:
-                                    if not is_loading:
-                                        target_img = img
-                                        break
-                            except:
-                                pass
-                        
-                        if target_img:
-                            break
-                        
-                        time.sleep(2)
+                    if await page.get_by_text(text, exact=False).first.is_visible():
+                        is_loading = True
+                        break
+                except:
+                    pass
         
-                    if target_img:
-                        print(f"[ChatGPT] [OK] Image sur cintre prete ! Extraction du lien direct...")
-                        img_url = target_img.get_attribute("src")
-                        print(f"[ChatGPT] Telechargement de l'image...")
-                        
-                        try:
-                            import base64
-                            base64_data = page.evaluate("""async (url) => {
-                                const response = await fetch(url);
-                                const blob = await response.blob();
-                                return new Promise((resolve, reject) => {
-                                    const reader = new FileReader();
-                                    reader.onloadend = () => resolve(reader.result.split(',')[1]);
-                                    reader.onerror = reject;
-                                    reader.readAsDataURL(blob);
-                                });
-                            }""", img_url)
-                            
-                            with open(output_path, "wb") as f:
-                                f.write(base64.b64decode(base64_data))
-                            print("[ChatGPT] [OK] Image sur cintre telechargee avec succes.")
-                            
-                            # --- NETTOYAGE DES MÉTADONNÉES AI ---
-                            strip_metadata(output_path)
-                            
-                            page.close()
-                            return True
-                        except Exception as fetch_err:
-                            print(f"[ChatGPT] [WARN] Echec du telechargement direct : {fetch_err}. Capture de secours.")
-                            try:
-                                page.evaluate("""() => {
-                                    const selectors = [
-                                        '.input-area-container', '.input-area', 'gmat-input-field', 'rich-textarea', 
-                                        'header', '.sidebar', '.chat-input-container', 'div[class*="input" i]', 'div[class*="composer" i]', 'form'
-                                    ];
-                                    selectors.forEach(sel => {
-                                        document.querySelectorAll(sel).forEach(el => el.style.setProperty('display', 'none', 'important'));
-                                    });
-                                }""")
-                                time.sleep(0.5)
-                            except Exception:
-                                pass
-                                
-                            target_img.screenshot(path=output_path)
-                            
-                            # --- NETTOYAGE DES MÉTADONNÉES AI ---
-                            strip_metadata(output_path)
-                            
-                            page.close()
-                            return True
-                    else:
-                        print(f"[ChatGPT] [WARN] Tentative {attempt}/{max_attempts} : Timeout de {timeout}s atteint.")
-                        page.screenshot(path=f"debug_chatgpt_hanger_timeout_{attempt}.png", full_page=True)
-                        page.close()
-                        
-                except Exception as attempt_err:
-                    print(f"[ChatGPT] [WARN] Erreur lors de la tentative {attempt}/{max_attempts} : {attempt_err}")
-                    try:
-                        page.close()
-                    except:
-                        pass
-                        
-            print("[ChatGPT] [ERROR] Toutes les tentatives de generation sur cintre ont echoue.")
-            return False
+        images = await page.locator("img").all()
+        for img in images:
+            try:
+                box = await img.bounding_box()
+                if box and box['width'] > 300 and box['height'] > 300:
+                    if not is_loading:
+                        target_img = img
+                        break
+            except:
+                pass
+        
+        if target_img:
+            return target_img
             
-    except Exception as e:
-        print(f"[ChatGPT] [ERROR] Erreur majeure lors de l'automatisation ChatGPT : {e}")
-        return False
+        await asyncio.sleep(2)
+    return None
 
-if __name__ == "__main__":
-    # Test rapide si lance directement - recherche dynamique
-    import glob
-    selfies = glob.glob(r"D:\AntiGravity\02 Projects\Business Vinted\Output_Listings\*\selfie.jpg")
-    if selfies:
-        test_in = selfies[0]
-        test_out = test_in.replace("selfie.jpg", "selfie_upscaled.jpg")
-        upscale_image_with_chatgpt(test_in, test_out)
-    else:
-        print("[ChatGPT] Aucun selfie trouve pour le test.")
+async def task_generate_selfie(context, input_image_path, avatar_path, output_path, prompt_anglais, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files([avatar_path, input_image_path])
+        await asyncio.sleep(5)
+        
+        backgrounds = [
+            "dans une chambre différente et lumineuse avec un lit fait, un mur blanc et une plante verte en arrière-plan",
+            "dans un dressing moderne et chic avec des vêtements suspendus et des boîtes de rangement de manière ordonnée",
+            "dans une salle de bain épurée et très propre avec un miroir propre et un carrelage blanc contemporain",
+            "dans un salon chaleureux et lumineux avec un canapé crème et un tableau abstrait coloré au mur",
+            "dans un intérieur minimaliste de style scandinave avec un meuble en bois clair et une lumière douce",
+            "dans un appartement parisien avec des moulures blanches au mur et du parquet en arrière-plan",
+            "dans une pièce avec un mur de couleur neutre (beige ou gris clair) et un éclairage naturel venant d'une fenêtre"
+        ]
+        bg_choice = random.choice(backgrounds)
+        prompt = (
+            f"Utilise les deux images fournies. La première image (image 1) est le portrait d'une fille servant de référence pour son visage, sa coiffure et sa silhouette. "
+            f"La deuxième image (image 2) montre un vêtement ({prompt_anglais}).\n"
+            f"Génère une seule photo ultra réaliste (style selfie spontané pris dans un miroir avec un smartphone) où la fille de l'image 1 porte fidèlement la tenue de l'image 2.\n"
+            f"Change le décor de fond : place la fille {bg_choice}.\n"
+            "La pose et l'éclairage doivent avoir l'air 100% naturels et non retouchés. Aucun filigrane ni texte sur l'image. "
+            "L'image doit être au format vertical portrait 3:4."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Selfie] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def task_generate_flat_lay(context, input_image_path, template_path, output_path, prompt_anglais, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files([template_path, input_image_path])
+        await asyncio.sleep(5)
+        
+        surfaces = [
+            "un sol en parquet de chêne clair avec des veines de bois naturelles et chaleureuses",
+            "un sol en parquet foncé de style vintage avec une texture de bois marquée",
+            "un tapis en laine beige ou crème épais et texturé",
+            "un tapis blanc moelleux et propre en fausse fourrure",
+            "un dessus de lit en lin ou coton blanc légèrement froissé, style scandinave épuré",
+            "un sol en béton ciré gris clair moderne et minimaliste"
+        ]
+        surface_choice = random.choice(surfaces)
+        prompt = (
+            f"Utilise les deux images fournies. La première image (image 1) montre un motif de sol ou de surface de référence. "
+            f"La deuxième image (image 2) montre un vêtement ({prompt_anglais}).\n"
+            f"Génère une seule photo ultra réaliste et spontanée en vue du dessus à 90 degrés (flat lay), où le vêtement de l'image 2 est posé à plat sur {surface_choice}.\n"
+            "Ajoute des ombres naturelles et subtiles sous le vêtement pour donner du relief. "
+            "IMPORTANT : Il ne doit y avoir aucun mannequin, aucun corps humain ni personne sur l'image. "
+            "L'image doit être au format vertical portrait 3:4 et parfaitement centrée."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Flat Lay] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def task_generate_hanger(context, original_image_path, hanger_template_path, output_path, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files([original_image_path, hanger_template_path])
+        await asyncio.sleep(5)
+        
+        prompt = (
+            "Utilise les deux images fournies. La première image montre le vêtement cible à reproduire. "
+            "La deuxième image est une image de référence montrant un cintre noir suspendu contre un mur blanc. "
+            "Génère une photo réaliste du vêtement de la première image suspendu exactement sur le cintre noir de la deuxième image, "
+            "contre le même mur blanc. Conserve fidèlement la coupe, la couleur, les motifs et la matière du vêtement."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Hanger] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def task_generate_profile(context, input_path, output_path, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files(input_path)
+        await asyncio.sleep(5)
+        
+        prompt = (
+            "Fais une version de cette image sous forme de selfie dans le miroir où le modèle se montre plus de profil (vue de côté), sans qu'on voie le dos. "
+            "Garde exactement la même personne, les mêmes cheveux, la même tenue (la même robe), le même téléphone et le même arrière-plan de la pièce."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Profile] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def task_generate_stroller_domestic(context, input_image_path, output_path, prompt_anglais, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files(input_image_path)
+        await asyncio.sleep(5)
+        
+        domestic_backgrounds = [
+            "dans le coin d'un salon moderne et lumineux, à côté d'une plante verte en pot et d'un canapé beige clair, avec du parquet au sol",
+            "dans l'entrée accueillante et propre d'une maison contemporaine, avec un paillasson propre et des murs de tons neutres",
+            "dans un couloir chic et bien éclairé, près d'un mur blanc cassé et d'une porte d'entrée",
+            "dans une pièce de vie épurée de style scandinave, avec de la lumière naturelle provenant d'une grande fenêtre",
+            "dans un dressing ou une chambre bien ordonnée, posée sur un sol en parquet de chêne clair"
+        ]
+        bg_choice = random.choice(domestic_backgrounds)
+        prompt = (
+            f"Utilise l'image fournie. Elle montre une poussette ({prompt_anglais}).\n"
+            f"Génère une seule photo ultra réaliste de style amateur prise avec un smartphone par son propriétaire dans son appartement. "
+            f"Place la poussette {bg_choice}.\n"
+            "Les ombres sous les roues et la poussette doivent être parfaitement naturelles et donner du relief. "
+            "IMPORTANT : Il ne doit y avoir aucun être humain ni aucune marque commerciale visible. "
+            "L'image doit être au format vertical portrait 3:4 et parfaitement centrée."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Stroller Domestic] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def task_generate_stroller_with_dog(context, input_image_path, output_path, prompt_anglais, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files(input_image_path)
+        await asyncio.sleep(5)
+        
+        dogs = [
+            "un adorable petit spitz nain (Pomeranian) tout poilu et souriant",
+            "un mignon petit carlin (Pug) avec de grands yeux expressifs",
+            "un adorable chiot golden retriever très doux",
+            "un très mignon petit bouledogue français aux oreilles dressées",
+            "un petit chihuahua joyeux et mignon"
+        ]
+        dog_choice = random.choice(dogs)
+        domestic_backgrounds = [
+            "dans le coin d'un salon moderne et chaleureux",
+            "dans l'entrée propre d'un appartement, à côté d'une plante verte",
+            "près d'une grande baie vitrée lumineuse avec du parquet au sol",
+            "dans une pièce de vie scandinave lumineuse"
+        ]
+        bg_choice = random.choice(domestic_backgrounds)
+        prompt = (
+            f"Utilise l'image fournie. Elle montre une poussette ({prompt_anglais}).\n"
+            f"Génère une seule photo ultra réaliste de style amateur {bg_choice}.\n"
+            f"IMPORTANT : Ajoute {dog_choice} confortablement assis ou debout à l'intérieur de la nacelle de la poussette. "
+            "Le chien doit avoir l'air très mignon, calme et heureux, en regardant en direction de la caméra.\n"
+            "Génère une seule photo ultra réaliste, style photo amateur prise avec un smartphone par le propriétaire de l'animal. "
+            "Il ne doit y avoir aucun être humain visible dans l'image.\n"
+            "L'image doit être au format vertical portrait 3:4 et parfaitement centrée."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Stroller Dog] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def generate_all_images_parallel_async(
+    niche: str,
+    file_path: str,
+    avatar_path: str,
+    floor_template_path: str,
+    hanger_template_path: str,
+    product_dir: str,
+    prompt: str
+) -> dict:
+    """
+    Orchestrateur asynchrone qui connecte à Edge CDP une seule fois,
+    lance les générations d'images en parallèle sur plusieurs onglets,
+    puis enchaîne l'image de profil une fois le selfie terminé.
+    """
+    print(f"\n[ChatGPT Parallel] Démarrage du pipeline asynchrone (Niche : {niche.upper()})...")
+    
+    if not start_edge():
+        print("[ChatGPT Parallel] ERREUR : Impossible de démarrer Edge.")
+        return {}
+
+    is_stroller = (niche == "stroller")
+    results = {
+        "selfie_upscaled": None,
+        "flat_lay_upscaled": None,
+        "profile_upscaled": None,
+        "hanger_upscaled": None
+    }
+    
+    async with async_playwright() as p:
+        try:
+            print("[ChatGPT Parallel] Connexion au navigateur Edge existant (CDP)...")
+            browser = await p.chromium.connect_over_cdp(CDP_URL)
+            context = browser.contexts[0]
+            dalle_lock = asyncio.Lock()
+            
+            if is_stroller:
+                selfie_path = os.path.join(product_dir, "selfie_upscaled.jpg")
+                flat_lay_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
+                
+                print("[ChatGPT Parallel] Lancement des 2 tâches poussettes en parallèle...")
+                task1 = task_generate_stroller_domestic(context, file_path, selfie_path, prompt, dalle_lock)
+                task2 = task_generate_stroller_with_dog(context, file_path, flat_lay_path, prompt, dalle_lock)
+                
+                res1, res2 = await asyncio.gather(task1, task2)
+                if res1:
+                    results["selfie_upscaled"] = selfie_path
+                if res2:
+                    results["flat_lay_upscaled"] = flat_lay_path
+                    
+            else:
+                selfie_path = os.path.join(product_dir, "selfie_upscaled.jpg")
+                flat_lay_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
+                hanger_path = os.path.join(product_dir, "hanger_upscaled.jpg")
+                
+                print("[ChatGPT Parallel] Lancement des 3 tâches vêtements en parallèle (Selfie, Flat Lay, Cintre)...")
+                task1 = task_generate_selfie(context, file_path, avatar_path, selfie_path, prompt, dalle_lock)
+                task2 = task_generate_flat_lay(context, file_path, floor_template_path, flat_lay_path, prompt, dalle_lock)
+                task3 = task_generate_hanger(context, file_path, hanger_template_path, hanger_path, dalle_lock)
+                
+                res1, res2, res3 = await asyncio.gather(task1, task2, task3)
+                
+                if res1:
+                    results["selfie_upscaled"] = selfie_path
+                if res2:
+                    results["flat_lay_upscaled"] = flat_lay_path
+                if res3:
+                    results["hanger_upscaled"] = hanger_path
+                
+                # Étape séquentielle secondaire : Génération de l'image de profil (dépend du Selfie)
+                if res1:
+                    profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
+                    print("[ChatGPT Parallel] Selfie OK. Lancement de la génération de profil...")
+                    res4 = await task_generate_profile(context, selfie_path, profile_path, dalle_lock)
+                    if res4:
+                        results["profile_upscaled"] = profile_path
+            
+            await browser.close()
+            print("[ChatGPT Parallel] Fin du pipeline asynchrone.")
+            return results
+            
+        except Exception as e:
+            print(f"[ChatGPT Parallel] Erreur critique dans l'orchestrateur : {e}")
+            return results

@@ -54,15 +54,15 @@ export default function Dashboard() {
   ]
 
   return (
-    <div className="flex flex-col gap-8 p-8 lg:p-10 max-w-7xl mx-auto w-full">
+    <div className="flex flex-col gap-6 p-4 sm:p-8 lg:p-10 max-w-7xl mx-auto w-full">
       {/* Parcel Alert Banner */}
       <ParcelAlertBanner />
 
       {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <header className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Bonjour Administrateur</h1>
-          <p className="text-zinc-400 mt-1 font-medium flex items-center gap-2">Aperçu général de votre activité de revente en temps réel.</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Bonjour Administrateur</h1>
+          <p className="text-zinc-400 mt-1 text-sm font-medium flex items-center gap-2">Aperçu général de votre activité de revente en temps réel.</p>
         </div>
         <div className="flex items-center gap-3">
           <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full border border-emerald-500/20">
@@ -72,14 +72,14 @@ export default function Dashboard() {
             </span>
             Live Updates
           </span>
-          <button className="bg-white text-black text-sm font-semibold px-4 py-2 rounded-lg hover:bg-zinc-200 transition-colors duration-200 shadow-md">
+          <button className="bg-white text-black text-xs sm:text-sm font-semibold px-3 py-2 rounded-lg hover:bg-zinc-200 transition-colors duration-200 shadow-md">
             Exporter rapport
           </button>
         </div>
       </header>
 
-      {/* Grid des KPIs */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6">
+      {/* Grid des KPIs (2 colonnes sur mobile, 3 sur tablette, 6 sur desktop) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         <KPICard 
           title="CA Total" 
           value={loading ? "..." : `${Number(stats?.caTotal || 0).toFixed(2)} €`}

@@ -42,7 +42,7 @@ export default function ArchivesPage() {
   })
 
   return (
-    <div className="flex flex-col gap-8 p-8 max-w-7xl mx-auto w-full">
+    <div className="flex flex-col gap-4 md:gap-8 p-4 md:p-8 max-w-7xl mx-auto w-full">
       
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -77,7 +77,8 @@ export default function ArchivesPage() {
             Aucune expédition archivée trouvée.
           </div>
         ) : (
-          <div className="overflow-x-auto">
+          <>
+            <div className="hidden md:block overflow-x-auto">
             <table className="w-full text-left text-sm border-collapse">
               <thead>
                 <tr className="bg-zinc-900/40 text-zinc-400 text-xs font-bold tracking-wider uppercase border-b border-zinc-800">
@@ -163,6 +164,80 @@ export default function ArchivesPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Grille de cartes pour mobile */}
+          <div className="grid grid-cols-1 gap-4 p-4 md:hidden">
+            {filtered.map((exp: any) => (
+              <div 
+                key={exp.id}
+                className="p-4 rounded-2xl border border-zinc-850 bg-zinc-950/40 backdrop-blur-sm relative flex flex-col gap-4 shadow-md"
+              >
+                <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
+                  <span className="text-xs text-zinc-500 font-mono flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5" />
+                    {new Date(exp.dateExpedition).toLocaleDateString('fr-FR')} {new Date(exp.dateExpedition).toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'})}
+                  </span>
+                  <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900 px-2 py-0.5 rounded uppercase tracking-wider">
+                    Archivée
+                  </span>
+                </div>
+
+                <div className="flex gap-4">
+                  {/* Visual / Info */}
+                  <div className="flex-1 min-w-0 flex flex-col gap-2">
+                    <div className="flex items-center gap-1.5 font-bold text-white text-sm">
+                      <User className="w-4 h-4 text-zinc-400 shrink-0"/>
+                      <span className="truncate">@{exp.vente.pseudoAcheteur}</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[9px] font-black uppercase text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800/50 tracking-widest shrink-0">
+                        {exp.vente.article.commande.fournisseur}
+                      </span>
+                      <span className="font-mono text-[10px] text-zinc-400 truncate">Cmd: {exp.vente.article.commande.numero}</span>
+                    </div>
+                  </div>
+
+                  {/* Finances */}
+                  <div className="flex flex-col items-end text-right shrink-0">
+                    <span className="text-sm font-black text-white">{Number(exp.vente.prixVente).toFixed(2)} €</span>
+                    <span className="text-[10px] font-bold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded mt-1.5">
+                      +{Number(exp.vente.beneficeNet).toFixed(2)} € net
+                    </span>
+                  </div>
+                </div>
+
+                {/* Tracking & Notes if any */}
+                {(exp.numeroBordereau || exp.notes) && (
+                  <div className="border-t border-zinc-900 pt-3 flex flex-col gap-2 text-xs">
+                    {exp.numeroBordereau && (
+                      <div className="flex items-center gap-1.5 text-zinc-300 font-medium">
+                        <Truck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                        <span className="font-mono font-bold">{exp.numeroBordereau}</span>
+                        <span className="text-[10px] text-zinc-500 font-normal">({exp.transporteur || 'N/D'})</span>
+                      </div>
+                    )}
+                    {exp.notes && (
+                      <p className="text-[10px] text-zinc-500 italic border-l-2 border-zinc-800 pl-2">"{exp.notes}"</p>
+                    )}
+                  </div>
+                )}
+
+                {exp.vente.lienVente && (
+                  <a 
+                    href={exp.vente.lienVente} 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="w-full text-center py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer mt-1"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5"/>
+                    Lien transaction
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+          </>
         )}
       </div>
 
