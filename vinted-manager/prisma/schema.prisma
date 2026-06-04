@@ -33,6 +33,7 @@ enum StatutArticle {
 }
 
 enum StatutVente {
+  COMMANDE_A_FAIRE
   EN_ATTENTE
   A_EXPEDIER
   EXPEDIEE
@@ -209,6 +210,7 @@ model VintedItemMetrics {
   botAccountId      String
   botAccount        BotAccount  @relation(fields: [botAccountId], references: [id])
   title             String
+  price             Decimal?    @db.Decimal(10, 2)
   url               String?     @db.Text
   photoUrl          String?     @db.Text
   viewCount         Int         @default(0)
@@ -295,5 +297,32 @@ model ExtensionLog {
   message      String      @db.Text
   type         String      @default("INFO") // INFO, SUCCESS, WARNING, ERROR, ACTION
   createdAt    DateTime    @default(now())
+}
+
+model SpyLikedItem {
+  id              String    @id @default(uuid())
+  itemId          String    @unique
+  title           String
+  price           Decimal   @db.Decimal(10, 2)
+  categoryId      Int
+  categoryName    String?
+  photoUrl        String?   @db.Text
+  url             String?   @db.Text
+  brand           String?
+  likedAt         DateTime  @default(now())
+  soldAt          DateTime?
+  removedAt       DateTime?
+  status          String    @default("AVAILABLE")
+  timeToSellHours Float?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model SpyCategory {
+  id          String   @id @default(uuid())
+  categoryId  Int      @unique
+  name        String
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
 }
 

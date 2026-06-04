@@ -3,12 +3,12 @@
 import React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { 
-  LayoutDashboard, 
-  ShoppingBag, 
-  Package, 
-  Tag, 
-  Truck, 
+import {
+  LayoutDashboard,
+  ShoppingBag,
+  Package,
+  Tag,
+  Truck,
   Settings,
   User,
   BarChart3,
@@ -17,7 +17,8 @@ import {
   MessageSquare,
   Flame,
   Boxes,
-  Puzzle
+  Puzzle,
+  Shirt
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -25,6 +26,8 @@ const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
   { name: 'Inbox 💬', href: '/inbox', icon: MessageSquare },
   { name: 'Winners 🔥', href: '/winners', icon: Flame },
+  { name: 'Market Spy 🔍', href: '/market-spy', icon: Search },
+  { name: 'Dressing 👗', href: '/dressing', icon: Shirt },
   { name: 'Extension 🧩', href: '/extension', icon: Puzzle },
   { name: 'Commandes', href: '/commandes', icon: ShoppingBag },
   { name: 'Stock', href: '/stock', icon: Boxes },

@@ -735,6 +735,7 @@ function scanNotificationsPage() {
     const results = {
         likes: [],
         messages: [],
+        spySold: [],
         timestamp: Date.now()
     };
 
@@ -784,6 +785,21 @@ function scanNotificationsPage() {
                 href: href,
                 convId: convMatch ? convMatch[1] : null,
                 isUnread: isUnread
+            });
+        }
+
+        // Détection articles spy vendus
+        if ((text.includes('vendu') || text.includes('sold')) &&
+            (text.includes('aimé') || text.includes('favori') || text.includes('liked'))) {
+            const link = item.querySelector('a[href*="/items/"]') ||
+                         item.closest('a[href*="/items/"]');
+            const href = link ? link.href : '';
+            const itemMatch = href.match(/\/items\/(\d+)/);
+            results.spySold.push({
+                text: text.substring(0, 200),
+                href: href,
+                itemId: itemMatch ? itemMatch[1] : null,
+                timestamp: Date.now()
             });
         }
     });
@@ -877,6 +893,21 @@ function handleScanResults(data, ghostTabId) {
     for (const msg of data.messages) {
         console.log(`📧 [GHOST V4] Message : "${msg.text}"`);
         saveLog(`📧 Nouveau message détecté`);
+    }
+
+    // Traitement articles spy vendus
+    if (data.spySold && data.spySold.length > 0) {
+        getManagerApiUrl().then(managerUrl => {
+            const baseUrl = managerUrl.replace('/api/comptabilite/balance', '');
+            data.spySold.forEach(sold => {
+                if (!sold.itemId) return;
+                fetch(`${baseUrl}/api/extension/spy/sold`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ itemId: sold.itemId, soldAt: sold.timestamp })
+                }).catch(e => console.warn('[SPY SOLD] Erreur:', e.message));
+            });
+        });
     }
 
     if (data.likes.length === 0 && data.messages.length === 0) {
@@ -1670,14 +1701,18 @@ async function syncVintedItemMetricsToManager() {
                         if (photoObj) {
                             photoUrl = photoObj.url || photoObj.full_size_url || (photoObj.thumbnails?.[0]?.url) || null;
                         }
-                        
+
                         let relativeUrl = item.url || `/items/${item.id}`;
-                        
+
+                        // Extraire le prix numérique (priorité : price_numeric > price.amount > price)
+                        const price = item.price_numeric ?? (item.price && typeof item.price === 'object' ? item.price.amount : null) ?? item.price ?? null;
+
                         return {
                             id: String(item.id),
                             title: item.title || "Article sans titre",
                             url: relativeUrl.startsWith("http") ? relativeUrl : `https://www.vinted.fr${relativeUrl}`,
                             photoUrl,
+                            price: price ? parseFloat(price) : null,
                             viewCount: Number(item.view_count || 0),
                             favouriteCount: Number(item.favourite_count || 0),
                             status: item.status || "Actif",
@@ -1752,6 +1787,7 @@ async function syncVintedItemMetricsToManager() {
 
 /**
  * ⚡ Commande Queue : Récupère les ordres du Manager et les exécute via injection Native.
+ * Support spécial pour REPOST_ITEM : exécution directe (pas de content script), avec keep-alive MV3.
  */
 async function pollActionQueueFromManager() {
     try {
@@ -1785,7 +1821,7 @@ async function pollActionQueueFromManager() {
             try {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 3000);
-                
+
                 const res = await fetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
 
@@ -1804,44 +1840,85 @@ async function pollActionQueueFromManager() {
 
         console.log(`⚡ [ACTIONS] ${pendingActions.length} ordres en attente du Manager ! Exécution séquentielle...`);
 
-        // 2. Traiter chaque action
-        for (const action of pendingActions) {
-            console.log(`⚡ [EXECUTE] Ordre ${action.actionType} (ID: ${action.id})`);
-            
-            let success = false;
-            let errorMessage = null;
+        // Keep-alive MV3 : déterminer si on a des REPOST_ITEM
+        const hasRepostItems = pendingActions.some(a => a.actionType === "REPOST_ITEM");
+        let keepAlive = null;
 
-            try {
-                await executeBotAction(tabId, action);
-                success = true;
-                console.log(`✅ [EXECUTE] Succès pour l'action #${action.id}`);
-            } catch (err) {
-                errorMessage = err.message;
-                console.error(`❌ [EXECUTE] Échec pour l'action #${action.id} :`, errorMessage);
-            }
+        if (hasRepostItems) {
+            console.log("⏱️ [REPOST] Délai détecté. Activation du keep-alive MV3 (ping toutes les 20s)...");
+            keepAlive = setInterval(() => {
+                chrome.runtime.getPlatformInfo(() => {});
+            }, 20000);
+        }
 
-            // 3. Mettre à jour le statut via PATCH sur le même endpoint
-            try {
-                await fetch(activeBaseUrl, {
-                    method: "PATCH",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        actionId: action.id,
-                        status: success ? "SUCCESS" : "FAILED",
-                        errorMessage: errorMessage
-                    })
-                });
-                
-                // Si c'était une action de messagerie ou d'offre, forcer instantanément un rafraîchissement de l'inbox
-                if (success && (action.actionType === "SEND_MESSAGE" || action.actionType === "ACCEPT_OFFER")) {
-                    setTimeout(() => syncVintedInboxToManager(), 2000);
+        try {
+            // 2. Traiter chaque action
+            for (const action of pendingActions) {
+                console.log(`⚡ [EXECUTE] Ordre ${action.actionType} (ID: ${action.id})`);
+
+                let success = false;
+                let errorMessage = null;
+
+                try {
+                    // Interception REPOST_ITEM : exécution directe via repostItemREST du service worker
+                    if (action.actionType === "REPOST_ITEM") {
+                        console.log(`🔄 [REPOST] Détection action REPOST_ITEM. Exécution directe dans le service worker...`);
+
+                        // Optionnel : attendre le délai avant reposte si fourni
+                        if (action.payload && action.payload.delayBeforeMs && action.payload.delayBeforeMs > 0) {
+                            console.log(`⏳ [REPOST] Attente ${action.payload.delayBeforeMs}ms avant le reposte...`);
+                            await new Promise(resolve => setTimeout(resolve, action.payload.delayBeforeMs));
+                        }
+
+                        // Exécuter repostItemREST directement (elle est globale via importScripts)
+                        const repostResult = await repostItemREST(action.payload.itemId, action.payload);
+                        console.log(`✅ [REPOST] Reposte réussi : ${repostResult.newId}`);
+                        success = true;
+                    } else if (action.actionType === "MARKET_SPY_LIKE") {
+                        const spyResult = await runMarketSpyLike(action.payload);
+                        console.log(`✅ [MARKET SPY] ${spyResult.liked} articles likés`);
+                        success = true;
+                    } else {
+                        // Actions standard : routage via content script
+                        await executeBotAction(tabId, action);
+                        success = true;
+                    }
+
+                    console.log(`✅ [EXECUTE] Succès pour l'action #${action.id}`);
+                } catch (err) {
+                    errorMessage = err.message;
+                    console.error(`❌ [EXECUTE] Échec pour l'action #${action.id} :`, errorMessage);
                 }
-            } catch (patchErr) {
-                console.error("❌ [EXECUTE] Impossible de notifier le Manager du statut de l'action :", patchErr);
+
+                // 3. Mettre à jour le statut via PATCH sur le même endpoint
+                try {
+                    await fetch(activeBaseUrl, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            actionId: action.id,
+                            status: success ? "SUCCESS" : "FAILED",
+                            errorMessage: errorMessage
+                        })
+                    });
+
+                    // Si c'était une action de messagerie ou d'offre, forcer instantanément un rafraîchissement de l'inbox
+                    if (success && (action.actionType === "SEND_MESSAGE" || action.actionType === "ACCEPT_OFFER")) {
+                        setTimeout(() => syncVintedInboxToManager(), 2000);
+                    }
+                } catch (patchErr) {
+                    console.error("❌ [EXECUTE] Impossible de notifier le Manager du statut de l'action :", patchErr);
+                }
+
+                // Pause humaine entre 2 actions
+                await new Promise(resolve => setTimeout(resolve, 1500));
             }
-            
-            // Pause humaine entre 2 actions
-            await new Promise(resolve => setTimeout(resolve, 1500));
+        } finally {
+            // Nettoyage du keep-alive si activé
+            if (keepAlive !== null) {
+                clearInterval(keepAlive);
+                console.log("✅ [REPOST] Keep-alive MV3 arrêté.");
+            }
         }
 
     } catch (e) {
@@ -2613,6 +2690,70 @@ async function runAutoLike(force = false) {
             });
         });
     });
+}
+
+async function runMarketSpyLike(payload) {
+    const { categories = [], priceMin = 40, maxItemsPerCategory = 30 } = payload;
+    const likedItems = [];
+
+    const stored = await chrome.storage.local.get(['spyLikedItemIds']);
+    const alreadyLiked = new Set(stored.spyLikedItemIds || []);
+
+    for (const cat of categories) {
+        try {
+            const catalogRes = await vintedFetch(
+                `/api/v2/catalog/items?catalog_ids[]=${cat.id}&price_from=${priceMin}&per_page=96&order=newest_first&page=1`
+            );
+            const catalogData = await catalogRes.json();
+            const items = (catalogData.items || []).filter(item => {
+                if (alreadyLiked.has(String(item.id))) return false;
+                const brand = (item.brand_title || '').toLowerCase().trim();
+                return !brand || brand === 'no label' || brand === 'sans marque' || brand === 'no brand';
+            }).slice(0, maxItemsPerCategory);
+
+            for (const item of items) {
+                try {
+                    await vintedFetch(`/api/v2/items/${item.id}/favourite`, { method: 'POST' });
+                    alreadyLiked.add(String(item.id));
+                    likedItems.push({
+                        itemId: String(item.id),
+                        title: item.title || '',
+                        price: parseFloat(item.price || 0),
+                        categoryId: cat.id,
+                        categoryName: cat.name,
+                        photoUrl: item.photo?.url || (item.photos && item.photos[0]?.url) || '',
+                        url: item.url || '',
+                        brand: item.brand_title || null
+                    });
+                    await new Promise(r => setTimeout(r, 2000 + Math.floor(Math.random() * 2000)));
+                } catch (e) {
+                    console.warn(`[MARKET SPY] Erreur like item ${item.id}:`, e.message);
+                }
+            }
+            await new Promise(r => setTimeout(r, 5000 + Math.floor(Math.random() * 5000)));
+        } catch (e) {
+            console.error(`[MARKET SPY] Erreur catégorie ${cat.id}:`, e.message);
+        }
+    }
+
+    await chrome.storage.local.set({ spyLikedItemIds: [...alreadyLiked] });
+
+    if (likedItems.length > 0) {
+        try {
+            const managerUrl = await getManagerApiUrl();
+            const baseUrl = managerUrl.replace('/api/comptabilite/balance', '');
+            await fetch(`${baseUrl}/api/extension/spy/liked`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ items: likedItems })
+            });
+            saveLog(`[MARKET SPY] ${likedItems.length} articles likés et enregistrés`);
+        } catch (e) {
+            console.warn('[MARKET SPY] Erreur rapport manager:', e.message);
+        }
+    }
+
+    return { liked: likedItems.length };
 }
 
 console.log("🧠 [GHOST BOOT] Background Service Worker initialisé à 100% sans erreur !");

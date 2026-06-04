@@ -60,6 +60,7 @@ export async function POST(request: Request) {
       const {
         id, // itemId natif
         title,
+        price,
         url,
         photoUrl,
         viewCount,
@@ -131,6 +132,7 @@ export async function POST(request: Request) {
         where: { id: id },
         update: {
           title,
+          price: price != null ? Number(price) : undefined,
           url,
           photoUrl,
           viewCount: views,
@@ -145,6 +147,7 @@ export async function POST(request: Request) {
           id: id,
           botAccountId: botAccount.id,
           title,
+          price: price != null ? Number(price) : undefined,
           url,
           photoUrl,
           viewCount: views,

@@ -301,29 +301,87 @@ async function processImageOffscreen(imageBlob) {
     try {
         // createImageBitmap est supporté nativement dans les Service Workers MV3 !
         const bitmap = await createImageBitmap(imageBlob);
-        
+
         // Créer un canevas virtuel 1px plus petit
         const targetWidth = Math.max(1, bitmap.width - 1);
         const targetHeight = Math.max(1, bitmap.height - 1);
-        
+
         const canvas = new OffscreenCanvas(targetWidth, targetHeight);
         const ctx = canvas.getContext('2d');
-        
+
         // Dessiner avec rognage infime pour forcer un ré-échantillonnage des pixels
         ctx.drawImage(bitmap, 0, 0, targetWidth, targetHeight, 0, 0, targetWidth, targetHeight);
-        
+
         // Convertir en Blob JPEG avec légère variation de qualité
         const processedBlob = await canvas.convertToBlob({
             type: 'image/jpeg',
             quality: 0.92
         });
-        
+
         // Libérer la mémoire
         bitmap.close();
-        
+
         return processedBlob;
     } catch (error) {
         console.warn("⚠️ Échec processImageOffscreen, utilisation du blob original :", error);
+        return imageBlob;
+    }
+}
+
+/**
+ * 🔪 Rognage Intelligent : Rogne un pourcentage donné sur CHAQUE bord d'une image.
+ * Si cropPercent <= 0 ou n'est pas un nombre, délègue à processImageOffscreen (anti-hash).
+ * @param {Blob} imageBlob L'image à rogner.
+ * @param {number} cropPercent Le pourcentage à couper sur chaque bord (0-50). Ex: 5 = 5% gauche + 5% droite + 5% haut + 5% bas.
+ * @returns {Blob} L'image rognée et recompressée.
+ */
+async function cropImageOffscreen(imageBlob, cropPercent) {
+    // Validation : si cropPercent n'est pas un nombre positif, déléguer au comportement anti-hash existant
+    if (typeof cropPercent !== 'number' || cropPercent <= 0 || cropPercent >= 50) {
+        console.log(`🎨 cropPercent invalide (${cropPercent}). Délégation à processImageOffscreen.`);
+        return processImageOffscreen(imageBlob);
+    }
+
+    try {
+        const bitmap = await createImageBitmap(imageBlob);
+        const width = bitmap.width;
+        const height = bitmap.height;
+
+        // Calculer les dimensions de la zone rognée
+        const cropPixelsX = Math.round(width * cropPercent / 100);
+        const cropPixelsY = Math.round(height * cropPercent / 100);
+
+        const srcX = cropPixelsX;
+        const srcY = cropPixelsY;
+        const srcWidth = width - 2 * cropPixelsX;
+        const srcHeight = height - 2 * cropPixelsY;
+
+        // Validation de sécurité : s'assurer que la zone source est valide
+        if (srcWidth <= 0 || srcHeight <= 0) {
+            console.warn(`⚠️ Rognage trop agressif (${cropPercent}%). Zone source invalide. Retour au blob original.`);
+            bitmap.close();
+            return imageBlob;
+        }
+
+        // Créer un canvas de la taille finale
+        const canvas = new OffscreenCanvas(srcWidth, srcHeight);
+        const ctx = canvas.getContext('2d');
+
+        // Dessiner la région rognée sur le nouveau canvas
+        ctx.drawImage(bitmap, srcX, srcY, srcWidth, srcHeight, 0, 0, srcWidth, srcHeight);
+
+        // Convertir en Blob JPEG
+        const croppedBlob = await canvas.convertToBlob({
+            type: 'image/jpeg',
+            quality: 0.92
+        });
+
+        bitmap.close();
+
+        console.log(`🔪 Rognage appliqué : ${cropPercent}% sur chaque bord (${width}x${height} -> ${srcWidth}x${srcHeight})`);
+        return croppedBlob;
+    } catch (error) {
+        console.warn("⚠️ Échec cropImageOffscreen, retour au blob original :", error);
         return imageBlob;
     }
 }
@@ -362,11 +420,22 @@ async function deleteItemREST(itemId) {
 /**
  * 🔄 REPOSTE FURTIF : Clone un article existant avec de nouvelles photos uniques puis détruit l'ancien.
  * @param {string|number} itemId L'identifiant de l'article à cloner.
- * @param {Object} options Options optionnelles (ex: deleteAfter: true).
+ * @param {Object} options Options optionnelles :
+ *   - deleteAfter {boolean} : supprimer l'ancien après reposte (défaut: true)
+ *   - cropPercent {number} : pourcentage à rogner sur chaque bord des photos (ex: 5 pour 5% de chaque côté)
+ *   - newTitle {string} : nouveau titre (défaut: original.title)
+ *   - newDescription {string} : nouvelle description (défaut: original.description)
+ *   - newPrice {number|string} : nouveau prix (défaut: original.price_numeric)
+ *   - photoOrder {Array<number>} : indices de réordonnancement des photos (ex: [2, 0, 1])
  */
 async function repostItemREST(itemId, options = {}) {
     console.log(`🔄 Démarrage du clonage furtif de l'article #${itemId}...`);
     const deleteAfter = options.deleteAfter !== undefined ? options.deleteAfter : true;
+    const cropPercent = options.cropPercent;
+    const newTitle = options.newTitle;
+    const newDescription = options.newDescription;
+    const newPrice = options.newPrice;
+    const photoOrder = options.photoOrder;
 
     // ÉTAPE 1 : Récupérer les détails internes de l'annonce existante
     let itemRes = await vintedFetch(`/api/v2/item_upload/items/${itemId}`);
@@ -397,7 +466,7 @@ async function repostItemREST(itemId, options = {}) {
     for (let i = 0; i < originalPhotos.length; i++) {
         const photoObj = originalPhotos[i];
         const photoUrl = photoObj.full_size_url || photoObj.url;
-        
+
         if (!photoUrl) continue;
 
         try {
@@ -405,12 +474,12 @@ async function repostItemREST(itemId, options = {}) {
             const fetchPhoto = await fetch(photoUrl);
             const photoBlob = await fetchPhoto.blob();
 
-            // Application de notre filtre anti-détection unique
+            // Appliquer le traitement d'image : rognage si cropPercent fourni, sinon anti-hash par défaut
             console.log(`🎨 Modification furtive des pixels (image ${i + 1})...`);
-            const scrambledBlob = await processImageOffscreen(photoBlob);
+            const processedBlob = await cropImageOffscreen(photoBlob, cropPercent);
 
             // Upload chez Vinted sous une nouvelle identité
-            const newId = await uploadPhotoToVinted(scrambledBlob, `repost_${i}.jpg`);
+            const newId = await uploadPhotoToVinted(processedBlob, `repost_${i}.jpg`);
             newPhotoIds.push({ id: newId, orientation: 0 });
 
             // Temporisation naturelle pour ne pas spammer l'infra photos
@@ -424,20 +493,36 @@ async function repostItemREST(itemId, options = {}) {
         throw new Error("Échec critique : Aucune photo n'a pu être régénérée pour le reposte.");
     }
 
-    // ÉTAPE 3 : Assemblage de la charge utile du clone
-    // Convertit le schéma de sortie Vinted en schéma d'entrée valide pour l'upload
+    // Appliquer le réordonnancement des photos si photoOrder est un tableau valide
+    let finalPhotoIds = newPhotoIds;
+    if (Array.isArray(photoOrder) && photoOrder.length > 0) {
+        console.log(`🔀 Réordonnancement des photos selon l'ordre : ${photoOrder.join(',')}`);
+        const reordered = [];
+        for (const idx of photoOrder) {
+            if (Number.isInteger(idx) && idx >= 0 && idx < newPhotoIds.length) {
+                reordered.push(newPhotoIds[idx]);
+            }
+        }
+        if (reordered.length > 0) {
+            finalPhotoIds = reordered;
+        } else {
+            console.warn(`⚠️ photoOrder invalide, conservation de l'ordre original`);
+        }
+    }
+
+    // ÉTAPE 3 : Assemblage de la charge utile du clone avec overrides optionnels
     const draftPayload = {
-        title: original.title,
-        description: original.description || "",
+        title: newTitle != null ? newTitle : original.title,
+        description: newDescription != null ? newDescription : (original.description || ""),
         catalog_id: original.catalog_id,
         brand_id: original.brand_id,
         size_id: original.size_id,
         status_id: original.status_id,
         package_size_id: original.package_size_id,
         color_ids: original.color_ids || [original.color1_id, original.color2_id].filter(Boolean),
-        price: parseFloat(original.price_numeric || original.price || 0),
+        price: newPrice != null ? parseFloat(newPrice) : parseFloat(original.price_numeric || original.price || 0),
         currency: original.currency || "EUR",
-        assigned_photos: newPhotoIds
+        assigned_photos: finalPhotoIds
     };
 
     // ÉTAPE 4 : Supprimer l'ancien AVANT de publier (évite la détection de doublons)
