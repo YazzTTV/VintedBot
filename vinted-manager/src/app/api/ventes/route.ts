@@ -7,7 +7,7 @@ const DEFAULT_USER_ID = '4700b998-a7e6-4c52-ac08-0e9893dba2ef' // Temporary seed
 export async function POST(request: Request) {
   try {
     const body = await request.json()
-    const { articleId, pseudoAcheteur, prixVente, lienVente, sourcingItem, botAccountId } = body
+    const { articleId, pseudoAcheteur, prixVente, lienVente, sourcingItem, botAccountId, taille } = body
 
     if (!prixVente || (!articleId && !sourcingItem)) {
       throw new Error("Données de vente ou d'article manquantes")
@@ -53,30 +53,46 @@ export async function POST(request: Request) {
           where: { id: articleId },
           data: { statut: 'VENDU' }
         })
-      } else if (sourcingItem) {
-        // B. Création Automatique de la Commande d'Urgence et de l'Article
+        // B. Création ou ajout au Panier existant
         const detectionFournisseur = sourcingItem.url?.toLowerCase().includes('shein') ? 'SHEIN' : 'TEMU'
-        const uniqueId = Math.random().toString(36).substring(2, 7).toUpperCase()
         
-        const newCmd = await tx.commandeFournisseur.create({
-          data: {
-            userId: DEFAULT_USER_ID,
-            numero: `URGENCE_${pseudoAcheteur.substring(0, 8).toUpperCase()}_${uniqueId}`,
-            fournisseur: detectionFournisseur,
-            dateCommande: new Date(),
-            prixTotal: 0, // Prix initial 0 en attendant la saisie réelle lors de l'achat
-            fraisPort: 0,
-            nbArticles: 1,
-            lienProduit: sourcingItem.url,
-            statut: 'COMMANDEE',
-            notes: `[URGENCE DROPSHIPPING] Vente effectuée sur le produit : ${sourcingItem.title} (Fiche: ${sourcingItem.fiche}). Compte bot : ${sourcingItem.account}`
+        // Recherche d'un panier en cours pour ce fournisseur
+        let panier = await tx.commandeFournisseur.findFirst({
+          where: {
+            fournisseur: detectionFournisseur as any,
+            statut: 'PANIER'
           }
-        })
+        });
+        
+        if (!panier) {
+            const dateStr = new Date().toISOString().split('T')[0];
+            panier = await tx.commandeFournisseur.create({
+              data: {
+                userId: DEFAULT_USER_ID,
+                numero: `PANIER_${detectionFournisseur}_${dateStr}`,
+                fournisseur: detectionFournisseur as any,
+                dateCommande: new Date(),
+                prixTotal: 0,
+                fraisPort: 0,
+                nbArticles: 0,
+                statut: 'PANIER',
+                notes: `Panier automatique généré le ${dateStr}.`
+              }
+            });
+        }
+        
+        // On met à jour le nombre d'articles
+        await tx.commandeFournisseur.update({
+            where: { id: panier.id },
+            data: { nbArticles: { increment: 1 } }
+        });
 
         const newArticle = await tx.article.create({
           data: {
-            commandeId: newCmd.id,
+            commandeId: panier.id,
             nom: sourcingItem.title, // 🚀 FIX: On enregistre le nom pour le matching visuel !
+            taille: taille || null, // 🚀 NEW: Sauvegarde de la taille pour l'auto-sourcing Shein
+            lienProduit: sourcingItem.url,
             prixAchatUnitaire: 0,
             fraisPortUnitaires: 0,
             statut: 'VENDU',
@@ -103,6 +119,22 @@ export async function POST(request: Request) {
         }
       })
 
+      // D. Création Automatique de l'action ADD_TO_CART_SHEIN si c'est du Sourcing
+      if (sourcingItem && botAccountId && sourcingItem.url?.toLowerCase().includes('shein')) {
+        await tx.botActionQueue.create({
+          data: {
+            botAccountId,
+            actionType: 'ADD_TO_CART_SHEIN',
+            status: 'PENDING',
+            payload: {
+              venteId: newVente.id,
+              url: sourcingItem.url,
+              taille: taille || 'S'
+            }
+          }
+        })
+      }
+
       return newVente
     })
 
@@ -124,6 +156,7 @@ export async function GET() {
         botAccount: {
           select: { name: true, vintedUsername: true }
         },
+        expedition: true,
         article: {
           include: {
             commande: {

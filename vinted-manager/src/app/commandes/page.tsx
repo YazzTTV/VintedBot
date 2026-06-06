@@ -847,7 +847,7 @@ export default function CommandesPage() {
                   .filter((c: any) => c.statut !== 'RECUE')
                   .map((cmd: any) => {
                     const isLate = cmd.dateArriveeEstimee && (new Date(cmd.dateArriveeEstimee) < new Date())
-                    const isUrgence = cmd.numero.startsWith('URGENCE_')
+                    const isUrgence = cmd.numero.startsWith('URGENCE_') || cmd.statut === 'PANIER'
                     
                     return (
                       <div 
@@ -873,7 +873,7 @@ export default function CommandesPage() {
                               </p>
                               {isUrgence && (
                                 <span className="px-1.5 py-0.5 bg-rose-600 text-[8px] font-black text-white rounded animate-pulse flex items-center gap-0.5 tracking-wider uppercase flex-shrink-0">
-                                  🚨 À commander
+                                  {cmd.statut === 'PANIER' ? '🛒 PANIER EN COURS' : '🚨 À COMMANDER'}
                                 </span>
                               )}
                             </div>
@@ -1033,7 +1033,7 @@ export default function CommandesPage() {
                   )
                   .map((cmd: any) => {
                     const isLate = cmd.dateArriveeEstimee && (new Date(cmd.dateArriveeEstimee) < new Date()) && cmd.statut !== 'RECUE'
-                    const isUrgence = cmd.numero.startsWith('URGENCE_') && cmd.statut !== 'RECUE'
+                    const isUrgence = (cmd.numero.startsWith('URGENCE_') || cmd.statut === 'PANIER') && cmd.statut !== 'RECUE'
                     
                     return (
                     <div key={cmd.id} className={cn(
@@ -1058,7 +1058,7 @@ export default function CommandesPage() {
                             </span>
                             {isUrgence && (
                               <span className="px-1.5 py-0.5 bg-rose-600 text-[8px] font-black text-white rounded animate-pulse flex items-center gap-0.5 tracking-wider uppercase flex-shrink-0">
-                                🚨 À passer
+                                {cmd.statut === 'PANIER' ? '🛒 PANIER EN COURS' : '🚨 À PASSER'}
                               </span>
                             )}
                           </div>

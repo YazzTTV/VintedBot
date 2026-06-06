@@ -42,7 +42,7 @@ export default function ExtensionDashboard() {
   const [injecting, setInjecting] = useState(false)
   const [injectStatus, setInjectStatus] = useState<{ success?: boolean; message?: string } | null>(null)
 
-  const terminalEndRef = useRef<HTMLDivElement>(null)
+  const terminalContainerRef = useRef<HTMLDivElement>(null)
 
   // Fetch status and logs
   const fetchData = async (showRefreshIndicator = false) => {
@@ -88,8 +88,11 @@ export default function ExtensionDashboard() {
 
   // Scroll to bottom when new logs arrive
   useEffect(() => {
-    if (autoScroll && terminalEndRef.current) {
-      terminalEndRef.current.scrollIntoView({ behavior: "smooth" })
+    if (autoScroll && terminalContainerRef.current) {
+      terminalContainerRef.current.scrollTo({
+        top: terminalContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      })
     }
   }, [logs, autoScroll])
 
@@ -364,7 +367,7 @@ export default function ExtensionDashboard() {
           </div>
 
           {/* Terminal Screen */}
-          <div className="flex-1 bg-black border border-zinc-900 rounded-xl p-4 overflow-y-auto font-mono text-xs leading-relaxed scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-900">
+          <div ref={terminalContainerRef} className="flex-1 bg-black border border-zinc-900 rounded-xl p-4 overflow-y-auto font-mono text-xs leading-relaxed scrollbar-thin scrollbar-track-transparent scrollbar-thumb-zinc-900">
             {logs.length > 0 ? (
               <div className="space-y-1.5">
                 {logs.slice().reverse().map((log) => (
@@ -387,7 +390,6 @@ export default function ExtensionDashboard() {
                     </span>
                   </div>
                 ))}
-                <div ref={terminalEndRef} />
               </div>
             ) : (
               <div className="h-full flex flex-col items-center justify-center text-zinc-600 gap-2">

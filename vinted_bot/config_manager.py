@@ -19,6 +19,7 @@ class AccountConfig:
         self.avatar_path = os.path.join(self.account_dir, "avatar.jpg")
         self.floor_template_path = os.path.join(self.account_dir, "floor_template.jpg")
         self.hanger_template_path = os.path.join(self.account_dir, "hanger_template.jpg")
+        self.hanger_templates_dir = os.path.join(self.account_dir, "Hanger_Templates")
         self.history_path = os.path.join(self.account_dir, "Sourcing_History.md")
         
         # Chargement d'éventuelles propriétés customisées depuis settings.json
@@ -28,6 +29,7 @@ class AccountConfig:
         self.prompt_style = "" # Custom prompt tweaks
         self.niche = "garment" # Par défaut ("garment", "stroller", etc.)
         self.brave_profile = "Default" # Par défaut (ex: "Default", "Profile 1")
+        self.cdp_port = 9222 # Port par défaut pour CDP
         
         self._load_settings()
  
@@ -41,6 +43,7 @@ class AccountConfig:
                     self.prompt_style = data.get("prompt_style", self.prompt_style)
                     self.niche = data.get("niche", self.niche)
                     self.brave_profile = data.get("brave_profile", self.brave_profile)
+                    self.cdp_port = data.get("cdp_port", self.cdp_port)
             except Exception:
                 pass
  
@@ -62,11 +65,21 @@ class AccountConfig:
             import shutil
             shutil.copy2(default_floor, self.floor_template_path)
             
-        # Pareil pour hanger template
         default_hanger = os.path.join(BOT_DIR, "hanger_template.jpg")
         if not os.path.exists(self.hanger_template_path) and os.path.exists(default_hanger):
             import shutil
             shutil.copy2(default_hanger, self.hanger_template_path)
+            
+        # Initialiser le dossier des modèles de cintres multiples
+        os.makedirs(self.hanger_templates_dir, exist_ok=True)
+        global_hanger_dir = os.path.join(BOT_DIR, "Hanger_Templates")
+        if os.path.exists(global_hanger_dir):
+            for file in os.listdir(global_hanger_dir):
+                src = os.path.join(global_hanger_dir, file)
+                dst = os.path.join(self.hanger_templates_dir, file)
+                if not os.path.exists(dst) and os.path.isfile(src):
+                    import shutil
+                    shutil.copy2(src, dst)
             
         # Initialiser settings.json si manquant
         if not os.path.exists(self.settings_path):
@@ -76,7 +89,8 @@ class AccountConfig:
                     "language": self.language, 
                     "prompt_style": self.prompt_style, 
                     "niche": self.niche,
-                    "brave_profile": self.brave_profile
+                    "brave_profile": self.brave_profile,
+                    "cdp_port": self.cdp_port
                 }, f, indent=2)
         else:
             # S'assurer que les nouveaux champs par défaut sont injectés dans les fichiers existants
@@ -94,6 +108,9 @@ class AccountConfig:
                 if "brave_profile" not in data:
                     data["brave_profile"] = self.brave_profile
                     updated = True
+                if "cdp_port" not in data:
+                    data["cdp_port"] = self.cdp_port
+                    updated = True
                 
                 if updated:
                     with open(self.settings_path, 'w', encoding='utf-8') as f:
@@ -110,7 +127,14 @@ def get_account_config(account_name: str = "nina") -> AccountConfig:
     return config
 
 def list_available_accounts():
-    """Liste tous les comptes disponibles dans le dossier Accounts."""
+    """Liste tous les comptes disponibles dans le dossier Accounts (en excluant les comptes inactifs locaux)."""
     if not os.path.exists(ACCOUNTS_ROOT):
         return []
-    return [d for d in os.listdir(ACCOUNTS_ROOT) if os.path.isdir(os.path.join(ACCOUNTS_ROOT, d))]
+    
+    # Comptes inactifs sur ce PC
+    ignored_accounts = {"emma", "margaux"}
+    
+    return [
+        d for d in os.listdir(ACCOUNTS_ROOT) 
+        if os.path.isdir(os.path.join(ACCOUNTS_ROOT, d)) and d.lower() not in ignored_accounts
+    ]

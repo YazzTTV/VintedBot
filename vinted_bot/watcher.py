@@ -114,7 +114,7 @@ def export_fake_item(fake_item_dir, output_dir):
         print(f"[Watcher] [Alternance] [ERROR] Aucune image trouvee dans {fake_item_dir}")
         return False
         
-    dest_names = ["selfie_upscaled.jpg", "flat_lay_upscaled.jpg", "profile_upscaled.jpg", "hanger_upscaled.jpg"]
+    dest_names = ["selfie_upscaled.jpg", "profile_upscaled.jpg", "selfie_hand_in_hair_upscaled.jpg", "flat_lay_upscaled.jpg", "hanger_upscaled.jpg", "folded_upscaled.jpg"]
     
     copied_count = 0
     for idx, img_name in enumerate(images):
@@ -203,8 +203,8 @@ class ScreenshotHandler(FileSystemEventHandler):
             return
         self.processed_files.add(file_path)
             
-        print(f"\n[Watcher] Nouvelle image detectee (ajoutee a la file d'attente) : {os.path.basename(file_path)}")
-        self.file_queue.put(file_path)
+        print(f"\n[Watcher] Nouvelle image detectee sur le compte {self.config.name} (ajoutee a la file d'attente) : {os.path.basename(file_path)}")
+        self.file_queue.put((file_path, self))
 
     def process_image(self, file_path):
         filename = os.path.basename(file_path)
@@ -283,6 +283,16 @@ class ScreenshotHandler(FileSystemEventHandler):
         profile_upscaled_path = None
         flat_lay_upscaled_path = None
         hanger_upscaled_path = None
+        folded_upscaled_path = None
+        selfie_hair_upscaled_path = None
+        
+        import random
+        # Selection aleatoire d'un template de cintre s'il y en a plusieurs
+        final_hanger_template = self.config.hanger_template_path
+        if hasattr(self.config, 'hanger_templates_dir') and os.path.exists(self.config.hanger_templates_dir):
+            templates = [f for f in os.listdir(self.config.hanger_templates_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp'))]
+            if templates:
+                final_hanger_template = os.path.join(self.config.hanger_templates_dir, random.choice(templates))
         
         # Lancement de la génération d'images en parallèle via l'orchestrateur asynchrone de ChatGPT
         import asyncio
@@ -297,7 +307,7 @@ class ScreenshotHandler(FileSystemEventHandler):
                     file_path,
                     self.config.avatar_path,
                     self.config.floor_template_path,
-                    self.config.hanger_template_path,
+                    final_hanger_template,
                     product_dir,
                     prompt
                 )
@@ -306,6 +316,8 @@ class ScreenshotHandler(FileSystemEventHandler):
             flat_lay_upscaled_path = image_results.get("flat_lay_upscaled")
             profile_upscaled_path = image_results.get("profile_upscaled")
             hanger_upscaled_path = image_results.get("hanger_upscaled")
+            folded_upscaled_path = image_results.get("folded_upscaled")
+            selfie_hair_upscaled_path = image_results.get("selfie_hand_in_hair_upscaled")
         except Exception as async_err:
             print(f"[Watcher] [ERROR] Échec de la génération d'images en parallèle : {async_err}")
         finally:
@@ -316,8 +328,8 @@ class ScreenshotHandler(FileSystemEventHandler):
             all_images_ok = (selfie_upscaled_path is not None) and (flat_lay_upscaled_path is not None)
             required_desc = "selfie upscalé et flat lay upscalé"
         else:
-            all_images_ok = (selfie_upscaled_path is not None) and (profile_upscaled_path is not None) and (flat_lay_upscaled_path is not None) and (hanger_upscaled_path is not None)
-            required_desc = "selfie upscalé, image de profil, flat lay upscalé, et image sur cintre"
+            all_images_ok = (selfie_upscaled_path is not None) and (profile_upscaled_path is not None) and (flat_lay_upscaled_path is not None) and (hanger_upscaled_path is not None) and (folded_upscaled_path is not None) and (selfie_hair_upscaled_path is not None)
+            required_desc = "6 images : selfie, profil, selfie_cheveux, flat lay, cintre et plié"
             
         # 4. Copie finale synchronisee vers la racine de OUTPUT_DIR pour declencher MacroDroid
         if all_images_ok:
@@ -333,7 +345,12 @@ class ScreenshotHandler(FileSystemEventHandler):
                 fake_folder = fake_items[0]
                 print(f"\n[Watcher] [Alternance] Alternance activee. Dernier post était IA.")
                 print(f"[Watcher] [Alternance] Preparation de l'annonce FAKE : {os.path.basename(fake_folder)}...")
-                if export_fake_item(fake_folder, self.config.output_dir):
+                
+                # Exporter vers un dossier local au lieu de output_dir (qui déclenchait MacroDroid)
+                fake_ready_dir = os.path.join(self.config.account_dir, "Fake_Ready")
+                os.makedirs(fake_ready_dir, exist_ok=True)
+                
+                if export_fake_item(fake_folder, fake_ready_dir):
                     # Deplacement automatique vers le dossier Used pour eviter la reutilisation
                     used_dir = os.path.join(fake_bank_dir, "Used")
                     os.makedirs(used_dir, exist_ok=True)
@@ -350,37 +367,28 @@ class ScreenshotHandler(FileSystemEventHandler):
                     if self.publish:
                         try:
                             from vinted_publisher import publish_listing
-                            publish_listing(self.config.name, self.config.output_dir, auto_submit=self.submit)
+                            # Publier directement depuis le dossier Fake_Ready local
+                            publish_listing(self.config.name, fake_ready_dir, auto_submit=self.submit)
                         except Exception as pub_err:
                             print(f"[Watcher] [ERROR] Echec de la publication auto du fake : {pub_err}")
                     countdown_wait(90)
             
-            # --- EXPORT DE L'ANNONCE IA ORIGINALE ---
-            # Nettoyage préalable de OUTPUT_DIR pour éviter les doublons sur le téléphone
-            try:
-                for item in os.listdir(self.config.output_dir):
-                    item_path = os.path.join(self.config.output_dir, item)
-                    if os.path.isfile(item_path):
-                        os.remove(item_path)
-                print(f"[Watcher] Nettoyage prealable reussi : ancienne annonce supprimee de {os.path.basename(self.config.output_dir)}.")
-            except Exception as clean_err:
-                print(f"[Watcher] Note nettoyage : {clean_err}")
-  
-            with open(os.path.join(self.config.output_dir, "titre.txt"), "w", encoding="utf-8") as f:
-                f.write(titre)
-            with open(os.path.join(self.config.output_dir, "description.txt"), "w", encoding="utf-8") as f:
-                f.write(description)
+            # --- FINALISATION DE L'ANNONCE IA (HUMANISATION GÉOMÉTRIQUE) ---
+            print("[Watcher] Application de l'humanisation géométrique finale...")
                 
             if selfie_upscaled_path:
-                # On applique l'humanisation visuelle géométrique complète lors de l'export vers le téléphone
-                humanize_image(selfie_upscaled_path, os.path.join(self.config.output_dir, "selfie_upscaled.jpg"), apply_transform=True)
+                humanize_image(selfie_upscaled_path, selfie_upscaled_path, apply_transform=True)
             if profile_upscaled_path:
-                humanize_image(profile_upscaled_path, os.path.join(self.config.output_dir, "profile_upscaled.jpg"), apply_transform=True)
+                humanize_image(profile_upscaled_path, profile_upscaled_path, apply_transform=True)
             if flat_lay_upscaled_path:
-                humanize_image(flat_lay_upscaled_path, os.path.join(self.config.output_dir, "flat_lay_upscaled.jpg"), apply_transform=True)
+                humanize_image(flat_lay_upscaled_path, flat_lay_upscaled_path, apply_transform=True)
             if hanger_upscaled_path:
-                humanize_image(hanger_upscaled_path, os.path.join(self.config.output_dir, "hanger_upscaled.jpg"), apply_transform=True)
-            print(f"[Watcher] [OK] Tous les fichiers ont été HUMANISÉS et déposés dans {self.config.output_dir}.")
+                humanize_image(hanger_upscaled_path, hanger_upscaled_path, apply_transform=True)
+            if folded_upscaled_path:
+                humanize_image(folded_upscaled_path, folded_upscaled_path, apply_transform=True)
+            if selfie_hair_upscaled_path:
+                humanize_image(selfie_hair_upscaled_path, selfie_hair_upscaled_path, apply_transform=True)
+            print(f"[Watcher] [OK] Tous les fichiers ont été HUMANISÉS et prêts dans l'archive locale ({product_dir}).")
             
             # Mise à jour finale de l'état (dernier posté devient IA)
             current_state = load_post_state(state_file)
@@ -406,19 +414,27 @@ class ScreenshotHandler(FileSystemEventHandler):
         print(f"\n[Watcher] [DONE] Traitement termine ! Annonce prete dans :\n   {product_dir}")
         print("-" * 50)
 
-def start_watcher(account_name="nina", publish=False, submit=False):
-    config = get_account_config(account_name)
+def start_watcher(account_name="all", publish=False, submit=False):
+    from config_manager import list_available_accounts
+    accounts = list_available_accounts() if account_name.lower() == "all" else [account_name]
     
     file_queue = queue.Queue()
-    event_handler = ScreenshotHandler(file_queue, config, publish=publish, submit=submit)
-    
     observer = Observer()
-    observer.schedule(event_handler, config.input_dir, recursive=False)
-    observer.start()
     
     print(f"\n" + "="*50, flush=True)
-    print(f"[WATCHER] DEMARRE ET ACTIF [COMPTE : {config.name.upper()}]", flush=True)
-    print(f"Dossier ecoute : {config.input_dir}", flush=True)
+    if len(accounts) > 1:
+        print(f"[WATCHER] DEMARRE EN MODE MULTI-COMPTE ({len(accounts)} comptes)", flush=True)
+    else:
+        print(f"[WATCHER] DEMARRE ET ACTIF [COMPTE : {accounts[0].upper()}]", flush=True)
+    
+    for acc in accounts:
+        config = get_account_config(acc)
+        event_handler = ScreenshotHandler(file_queue, config, publish=publish, submit=submit)
+        observer.schedule(event_handler, config.input_dir, recursive=False)
+        print(f"Dossier ecoute : {config.input_dir}", flush=True)
+        
+    observer.start()
+    
     print(f"File d'attente active : deposez vos images en vrac !", flush=True)
     if publish:
         print(f"Publication automatique activee (Soumission auto: {submit})", flush=True)
@@ -427,18 +443,18 @@ def start_watcher(account_name="nina", publish=False, submit=False):
     try:
         while True:
             try:
-                # Recupere l'image suivante. block=True et timeout=1 permet de rester sensible au KeyboardInterrupt (Ctrl+C)
-                file_path = file_queue.get(block=True, timeout=1)
+                # Recupere l'image suivante.
+                file_path, handler = file_queue.get(block=True, timeout=1)
                 
                 # Petite pause pour s'assurer que le fichier est completement ecrit par l'OS
                 time.sleep(2)
                 
-                # Traitement de l'image avec verrou global inter-processus (File d'attente)
+                # Traitement de l'image avec verrou global inter-processus
                 lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_watcher.lock")
                 print(f"[Watcher] En attente de la disponibilité (File d'attente globale)...")
                 with SimpleFileLock(lock_path):
-                    print(f"[Watcher] >>> C'EST MON TOUR ! Traitement de l'image en cours... <<<")
-                    event_handler.process_image(file_path)
+                    print(f"[Watcher] >>> C'EST MON TOUR ! Traitement de l'image pour le compte {handler.config.name} <<<")
+                    handler.process_image(file_path)
                 
                 # Marque la tache comme terminee dans la file
                 file_queue.task_done()
@@ -456,7 +472,7 @@ def start_watcher(account_name="nina", publish=False, submit=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Watcher d'images automatisé pour pipeline Vinted")
-    parser.add_argument("--account", type=str, default="nina", help="Nom du compte cible à surveiller")
+    parser.add_argument("--account", type=str, default="all", help="Nom du compte cible à surveiller (ou 'all' pour tous)")
     parser.add_argument("--publish", action="store_true", help="Publier automatiquement via Playwright CDP sur Vinted")
     parser.add_argument("--submit", action="store_true", help="Publier directement sans attendre de validation humaine")
     

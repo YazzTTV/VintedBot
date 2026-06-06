@@ -131,16 +131,37 @@ def open_gemini_page(playwright) -> tuple:
 
 def upload_files(page, file_paths: list[str]) -> bool:
     """
-    Upload une liste de fichiers dans Gemini via le bouton '+'.
-    Flow en 2 etapes : clic '+' -> clic 'Importer des fichiers' -> file chooser.
+    Upload une liste de fichiers dans Gemini.
+    Tente d'abord l'injection directe (input type file), puis la methode par clic.
     """
-    # Etape 1 : ouvrir le sous-menu
-    all_plus = [PLUS_BUTTON_SELECTOR] + PLUS_BUTTON_FALLBACKS
+    try:
+        # METHODE 1 : Injection directe (tres rapide) via le DOM
+        file_inputs = page.locator('input[type="file"]')
+        if file_inputs.count() > 0:
+            try:
+                # set_files fonctionne meme sur les inputs caches
+                file_inputs.last.set_files(file_paths, timeout=2000)
+                time.sleep(2)
+                print("[Edge] Upload reussi via input direct.")
+                return True
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # METHODE 2 : Clic sur le bouton '+' puis sur le menu d'upload
+    all_plus = [PLUS_BUTTON_SELECTOR] + PLUS_BUTTON_FALLBACKS + [
+        'button[aria-label*="Ajouter" i]',
+        'button[aria-label*="Add" i]',
+        'button[aria-label*="Upload" i]',
+        'button[mattooltip*="Ajouter" i]',
+        'button:left-of(rich-textarea)'
+    ]
     plus_clicked = False
     for sel in all_plus:
         try:
             el = page.locator(sel).first
-            if el.is_visible(timeout=2000):
+            if el.is_visible(timeout=1000):
                 el.click()
                 plus_clicked = True
                 break
@@ -155,17 +176,31 @@ def upload_files(page, file_paths: list[str]) -> bool:
     time.sleep(1.5)
 
     # Etape 2 : clic 'Importer des fichiers' + file chooser
-    try:
-        el = page.locator(LOCAL_FILES_SELECTOR).first
-        if el.is_visible(timeout=3000):
-            with page.expect_file_chooser(timeout=8000) as fc_info:
-                el.click()
-            fc_info.value.set_files(file_paths)
-            time.sleep(5)
-            return True
-    except Exception as e:
-        print(f"[Edge] ERREUR upload : {e}")
-
+    upload_menu_selectors = [
+        LOCAL_FILES_SELECTOR,
+        '[data-test-id*="upload" i]',
+        'li:has-text("Importer")',
+        'li:has-text("Upload")',
+        'menu-item:has-text("Importer")',
+        'menu-item:has-text("Upload")',
+        '[aria-label*="Importer depuis cet appareil" i]',
+        'span:has-text("Importer depuis cet appareil")'
+    ]
+    
+    for sel in upload_menu_selectors:
+        try:
+            el = page.locator(sel).first
+            if el.is_visible(timeout=1000):
+                with page.expect_file_chooser(timeout=8000) as fc_info:
+                    el.click()
+                fc_info.value.set_files(file_paths)
+                time.sleep(4)
+                print("[Edge] Upload reussi via le menu.")
+                return True
+        except Exception as e:
+            continue
+            
+    print("[Edge] ERREUR : Menu d'importation introuvable apres le clic sur le '+'.")
     page.screenshot(path="debug_upload_fail.png")
     return False
 

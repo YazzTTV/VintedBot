@@ -20,13 +20,25 @@ import {
   Truck,
   ArrowUpDown,
   Clock,
-  AlertTriangle
+  AlertTriangle,
+  Download
 } from "lucide-react"
 import { cn, getWorkingDaysDifference, addWorkingDays } from "@/lib/utils"
 
 export default function VentesPage() {
   const [ventes, setVentes] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+
+  const handleAutoSource = async (venteId: string) => {
+    try {
+      const res = await fetch(`/api/ventes/${venteId}/auto-source`, { method: 'POST' })
+      const data = await res.json()
+      if (!data.success) throw new Error(data.error)
+      alert("✅ L'extension Chrome va ajouter l'article au panier Shein dans quelques secondes !")
+    } catch (err: any) {
+      alert("Erreur: " + err.message)
+    }
+  }
   
   // New Sale Creation Flow States
   const [isModalOpen, setIsModalOpen] = useState(false)
@@ -70,7 +82,9 @@ export default function VentesPage() {
     pseudoAcheteur: '',
     prixVente: '',
     lienVente: '',
-    botAccountId: ''
+    botAccountId: '',
+    fraisVinted: 0.70,
+    taille: 'S'
   })
 
   const loadVentes = async () => {
@@ -140,25 +154,38 @@ export default function VentesPage() {
     setIsSaving(true)
     try {
       // Envoyer l'articleId pour inventaire OU le sourcingItem pour la commande d'urgence automatique
-      const bodyPayload = {
+      const payload = {
+        saleMode,
+        articleId: saleForm.articleId,
+        sourcingItemId: selectedSourcingItem?.id,
         pseudoAcheteur: saleForm.pseudoAcheteur,
-        prixVente: saleForm.prixVente,
-        lienVente: saleForm.lienVente,
-        articleId: saleMode === 'inventory' ? saleForm.articleId : null,
-        sourcingItem: saleMode === 'catalogue' ? selectedSourcingItem : null,
+        prixVente: Number(saleForm.prixVente),
+        fraisVinted: Number(saleForm.fraisVinted),
+        taille: saleForm.taille || null,
         botAccountId: saleForm.botAccountId || null
       }
 
       const res = await fetch('/api/ventes', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(bodyPayload)
+        body: JSON.stringify(payload)
       })
       
       const data = await res.json()
       if (data.success) {
+        if (saleMode === 'catalogue' && selectedSourcingItem?.url?.toLowerCase().includes('shein')) {
+          alert("✅ Vente enregistrée ! L'extension Chrome va automatiquement ouvrir Shein et ajouter l'article au panier dans quelques secondes.")
+        }
         setIsModalOpen(false)
-        setSaleForm({ articleId: '', pseudoAcheteur: '', prixVente: '', lienVente: '', botAccountId: '' })
+        setSaleForm({ 
+          articleId: '', 
+          pseudoAcheteur: '', 
+          prixVente: '', 
+          lienVente: '', 
+          botAccountId: '',
+          fraisVinted: 0.70,
+          taille: 'S'
+        })
         setSelectedSourcingItem(null)
         setSourcingSearch('')
         setSaleMode('inventory')
@@ -493,17 +520,18 @@ export default function VentesPage() {
         </div>
 
         <div className="hidden md:block overflow-x-auto w-full pb-28 min-h-[320px]">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full text-left border-collapse min-w-[1300px]">
             <thead>
               <tr className="text-xs font-bold text-zinc-500 tracking-wider uppercase border-b border-zinc-900">
-                <th className="px-6 py-5">Visuel</th>
-                <th className="px-6 py-5">Date / Acheteur</th>
-                <th className="px-6 py-5">Désignation Article</th>
-                <th className="px-6 py-5 text-right">Prix Vente</th>
-                <th className="px-6 py-5 text-right">Bénéfice Net</th>
-                <th className="px-6 py-5 text-center">Statut</th>
-                <th className="px-6 py-5 text-center">Délai Exp.</th>
-                <th className="px-6 py-5 text-right">Actions</th>
+                <th className="px-3 py-4">Visuel</th>
+                <th className="px-3 py-4">Date / Acheteur</th>
+                <th className="px-3 py-4">Désignation Article</th>
+                <th className="px-3 py-4 text-right">Prix Vente</th>
+                <th className="px-3 py-4 text-right">Bénéfice Net</th>
+                <th className="px-3 py-4 text-center">Statut</th>
+                <th className="px-3 py-4 text-center">Délai Exp.</th>
+                <th className="px-3 py-4 text-center">Bordereau</th>
+                <th className="px-3 py-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-900">
@@ -526,7 +554,7 @@ export default function VentesPage() {
                   <tr key={v.id} className="group hover:bg-zinc-900/30 transition-colors">
                     
                     {/* Visuel */}
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-3 py-4 whitespace-nowrap">
                       <div className="w-10 h-14 bg-zinc-900 rounded-lg border border-zinc-800 overflow-hidden flex items-center justify-center flex-shrink-0 group-hover:border-emerald-500/50 transition-colors">
                         {v.photoUrl ? (
                           <img src={v.photoUrl} alt={v.article?.nom} className="w-full h-full object-cover" />
@@ -537,8 +565,8 @@ export default function VentesPage() {
                     </td>
 
                     {/* Col 1: Info Acheteur & Date */}
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
+                    <td className="px-3 py-4">
+                      <div className="flex items-center gap-2">
                          <div className="w-9 h-9 rounded-full bg-zinc-900 flex items-center justify-center text-zinc-400 group-hover:bg-emerald-500/10 group-hover:text-emerald-400 transition-colors">
                            <User className="w-4 h-4" />
                          </div>
@@ -565,28 +593,35 @@ export default function VentesPage() {
                     </td>
 
                     {/* Col 2: Désignation & Origine */}
-                    <td className="px-6 py-4">
+                    <td className="px-3 py-4">
                       <div className="text-xs max-w-[160px]">
                         <p className="text-white font-bold truncate leading-snug" title={v.article?.nom || "Article Standard"}>
                           {v.article?.nom || "Article Standard"}
                         </p>
-                        <div className="flex items-center gap-1.5 mt-1">
-                          <span className="text-[9px] font-black uppercase text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800/50 tracking-widest">
-                            {v.article?.commande?.fournisseur || 'N/A'}
-                          </span>
-                          <p className="text-[10px] text-zinc-600 font-mono truncate">#{v.article?.id?.slice(0,8)}</p>
+                        <div className="flex flex-col gap-1.5 mt-1">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] font-black uppercase text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800/50 tracking-widest">
+                              {v.article?.commande?.fournisseur || 'N/A'}
+                            </span>
+                            <p className="text-[10px] text-zinc-600 font-mono truncate">#{v.article?.id?.slice(0,8)}</p>
+                          </div>
+                          {v.article?.commande?.numero?.startsWith('URGENCE') && (
+                            <span className="text-[9px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded flex items-center gap-1 animate-pulse w-fit">
+                              <AlertTriangle className="w-2.5 h-2.5" /> À COMMANDER !
+                            </span>
+                          )}
                         </div>
                       </div>
                     </td>
 
                     {/* Col 3: Sales Price */}
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-3 py-4 text-right">
                       <p className="text-sm font-extrabold text-white">{Number(v.prixVente).toFixed(2)} €</p>
                       <p className="text-[10px] text-zinc-500 mt-0.5">Frais: {Number(v.fraisVinted).toFixed(2)} €</p>
                     </td>
 
                     {/* Col 4: Net Profit & Perc */}
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-3 py-4 text-right">
                       <div className="inline-flex flex-col items-end">
                         <span className="text-sm font-black text-emerald-400">
                           +{Number(v.beneficeNet).toFixed(2)} €
@@ -598,62 +633,57 @@ export default function VentesPage() {
                     </td>
 
                     {/* Col 5: Shipment Status */}
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-3 py-4 text-center">
                        {v.statut === 'EXPEDIEE' ? (
-                         <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest">
+                         <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
                            Expédiée
                          </span>
                        ) : (
-                         <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest">
+                         <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
                            À envoyer
                          </span>
                        )}
                     </td>
 
                     {/* Col 6: Délai Expéd. */}
-                    <td className="px-6 py-4 text-center">
+                    <td className="px-3 py-4 text-center">
                       {v.statut === 'EXPEDIEE' ? (
-                        <span className="text-[10px] font-semibold text-zinc-600">—</span>
+                        <span className="text-[10px] font-bold text-zinc-500">—</span>
                       ) : (
                         (() => {
                           const limitDate = v.dateLimiteExpedition 
                             ? new Date(v.dateLimiteExpedition) 
                             : addWorkingDays(new Date(v.dateVente), 5);
+                            
+                          const diffDays = getWorkingDaysDifference(new Date(), limitDate);
+                          let deadlineStyle = "text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/20";
                           
-                          const now = new Date();
-                          const diffDays = getWorkingDaysDifference(now, limitDate);
-                          
-                          let badgeStyle = "text-zinc-400 bg-zinc-900 border border-zinc-800/50";
-                          let label = `J-${diffDays}`;
-                          
-                          if (diffDays < 0) {
-                            badgeStyle = "text-rose-400 bg-rose-500/10 border border-rose-500/20 font-black animate-pulse";
-                            label = "RETARD !";
-                          } else if (diffDays === 0) {
-                            badgeStyle = "text-rose-400 bg-rose-500/10 border border-rose-500/20 font-black animate-pulse";
-                            label = "AUJOURD'HUI";
+                          if (diffDays <= 0) {
+                            deadlineStyle = "text-rose-400 bg-rose-500/10 border border-rose-500/20 font-black animate-pulse";
                           } else if (diffDays === 1 || diffDays === 2) {
-                            badgeStyle = "text-orange-400 bg-orange-500/10 border border-orange-500/20 font-bold";
+                            deadlineStyle = "text-orange-400 bg-orange-500/10 border border-orange-500/20 font-bold";
                           } else if (diffDays >= 3) {
-                            badgeStyle = "text-amber-500/80 bg-amber-500/5 border border-amber-500/10 font-semibold";
+                            deadlineStyle = "text-amber-500/80 bg-amber-500/5 border border-amber-500/10 font-semibold";
                           }
-                          
+
                           return (
-                            <div className="flex flex-col items-center gap-1">
-                              <span className={cn("text-[9px] px-1.5 py-0.5 rounded flex items-center gap-1 tracking-wider uppercase", badgeStyle)} title={`Limite: ${limitDate.toLocaleDateString('fr-FR')}`}>
-                                <Clock className="w-2.5 h-2.5" />
-                                {label}
+                            <div className="flex flex-col items-center gap-1.5">
+                              <span className={cn("text-[10px] px-2 py-0.5 rounded-full flex items-center gap-1 whitespace-nowrap", deadlineStyle)}>
+                                <Clock className="w-3 h-3" />
+                                J-{diffDays}
                               </span>
-                              <span className="text-[10px] font-semibold text-zinc-500">
-                                {limitDate.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                              <span className="text-[9px] text-zinc-500 whitespace-nowrap">
+                                {limitDate.toLocaleDateString('fr-FR')}
                               </span>
+                              
                               {v.extensionStatut === 'DEMANDEE' && (
-                                <span className="text-[8px] font-bold text-teal-400 border border-teal-500/20 bg-teal-500/5 px-1 rounded animate-pulse">
+                                <span className="text-[8px] font-bold text-teal-400 border border-teal-500/20 bg-teal-500/5 px-1 rounded animate-pulse mt-0.5">
                                   ⏳ Demande en cours
                                 </span>
                               )}
+
                               {v.extensionStatut === 'ACCEPTEE' && (
-                                <span className="text-[8px] font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1 rounded flex items-center gap-0.5">
+                                <span className="text-[8px] font-black text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1 py-0.5 rounded flex items-center gap-0.5 mt-0.5 whitespace-nowrap">
                                   ➕ Allongé (+5j)
                                 </span>
                               )}
@@ -663,7 +693,28 @@ export default function VentesPage() {
                       )}
                     </td>
 
-                    {/* Col 6: Options Menu Popover (⋮) */}
+                    {/* Col 7: Bordereau */}
+                    <td className="px-3 py-4 text-center">
+                      {v.expedition?.bordereauUrl ? (
+                        <a href={v.expedition.bordereauUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 text-[10px] font-bold text-teal-400 bg-teal-500/10 border border-teal-500/20 px-2.5 py-1.5 rounded-lg hover:bg-teal-500/20 transition-colors whitespace-nowrap">
+                          <Download className="w-3.5 h-3.5" /> Voir
+                        </a>
+                      ) : v.extensionStatut === 'DEMANDEE' ? (
+                        <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/5 border border-indigo-500/20 px-2.5 py-1.5 rounded-lg whitespace-nowrap inline-flex items-center gap-1.5">
+                          <Clock className="w-3.5 h-3.5 opacity-50" /> Attente accord...
+                        </span>
+                      ) : v.extensionStatut === 'ACCEPTEE' ? (
+                        <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 rounded-lg whitespace-nowrap inline-flex items-center gap-1.5 animate-pulse">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin opacity-80" /> Extraction...
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-zinc-500 bg-zinc-900 border border-zinc-800 px-2.5 py-1.5 rounded-lg whitespace-nowrap inline-flex items-center gap-1.5">
+                          <Download className="w-3.5 h-3.5 opacity-50" /> À extraire
+                        </span>
+                      )}
+                    </td>
+
+                    {/* Col 8: Options Menu Popover (⋮) */}
                     <td className="px-6 py-4 text-right relative">
                       <div className="relative flex justify-end items-center">
                         <button
@@ -691,6 +742,16 @@ export default function VentesPage() {
                                 <Truck className="w-3.5 h-3.5 text-teal-500" /> 
                                 {v.statut === 'EXPEDIEE' ? 'Marquer À Envoyer' : 'Marquer Expédiée'}
                               </button>
+
+                              {v.article?.commande?.numero?.startsWith('URGENCE') && (
+                                <button 
+                                  type="button"
+                                  onClick={() => handleAutoSource(v.id)}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-black text-rose-400 hover:text-white hover:bg-rose-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  🛒 Auto-Commander (Shein)
+                                </button>
+                              )}
 
                               {v.statut === 'EN_ATTENTE' && (
                                 <>
@@ -815,11 +876,18 @@ export default function VentesPage() {
                         <h3 className="text-white text-xs truncate font-medium mt-1">
                           {v.article?.nom || "Article Standard"}
                         </h3>
-                        <div className="flex items-center gap-1.5 mt-2">
-                          <span className="text-[9px] font-black uppercase text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800/50">
-                            {v.article?.commande?.fournisseur || 'N/A'}
-                          </span>
-                          <span className="text-[9px] text-zinc-500 font-mono">#{v.article?.id?.slice(0, 8)}</span>
+                        <div className="flex flex-col gap-1.5 mt-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] font-black uppercase text-zinc-500 bg-zinc-900 px-1.5 py-0.5 rounded border border-zinc-800/50">
+                              {v.article?.commande?.fournisseur || 'N/A'}
+                            </span>
+                            <span className="text-[9px] text-zinc-500 font-mono">#{v.article?.id?.slice(0, 8)}</span>
+                          </div>
+                          {v.article?.commande?.numero?.startsWith('URGENCE') && (
+                            <span className="text-[9px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded flex items-center gap-1 animate-pulse w-fit">
+                              <AlertTriangle className="w-2 h-2" /> À COMMANDER !
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -1104,6 +1172,18 @@ export default function VentesPage() {
                       
                       <div className="mt-2.5 text-[10px] font-black text-rose-400 bg-rose-950/30 border border-rose-900/30 px-2.5 py-1 rounded w-fit animate-pulse">
                         ⚠️ COMMANDE D'URGENCE GÉNÉRÉE AUTOMATIQUEMENT
+                      </div>
+                      
+                      <div className="mt-3 space-y-1.5 border-t border-emerald-500/20 pt-3">
+                        <label className="text-xs font-medium text-emerald-400">Taille de l'article (Optionnel, ex: S, M, L)</label>
+                        <input 
+                          type="text"
+                          placeholder="S, M, L, XL, 38, 40..."
+                          value={saleForm.taille}
+                          onChange={e => setSaleForm({...saleForm, taille: e.target.value})}
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white outline-none focus:border-emerald-500/50"
+                        />
+                        <p className="text-[10px] text-zinc-500">Nécessaire pour l'Auto-Sourcing Shein via l'extension.</p>
                       </div>
                     </div>
                   ) : (

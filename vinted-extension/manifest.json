@@ -27,6 +27,8 @@
     "*://*.vinted.co.uk/*",
     "*://*.temu.com/*",
     "*://*.kwcdn.com/*",
+    "*://*.shein.com/*",
+    "*://*.shein.fr/*",
     "https://vinted-manager-flame.vercel.app/*",
     "http://localhost:3000/*",
     "https://generativelanguage.googleapis.com/*"

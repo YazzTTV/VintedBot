@@ -16,18 +16,34 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
     const botAccountName = searchParams.get('botAccountName')
+    const vintedAccountId = searchParams.get('vintedAccountId')
 
-    if (!botAccountName) {
+    if (!botAccountName && !vintedAccountId) {
       return NextResponse.json(
-        { success: false, error: "Paramètre botAccountName requis" },
+        { success: false, error: "Paramètre botAccountName ou vintedAccountId requis" },
         { status: 400, headers: corsHeaders }
       )
     }
 
     // Trouver le compte correspondant
-    const account = await prisma.botAccount.findUnique({
-      where: { name: botAccountName }
-    })
+    let account = null;
+    
+    if (vintedAccountId) {
+      account = await prisma.botAccount.findFirst({
+        where: { vintedAccountId: String(vintedAccountId) }
+      })
+    }
+    
+    if (!account && botAccountName) {
+      account = await prisma.botAccount.findFirst({
+        where: { 
+          OR: [
+            { name: botAccountName },
+            { vintedUsername: botAccountName }
+          ]
+        }
+      })
+    }
 
     if (!account) {
       // Si le compte n'existe pas encore, il n'a logiquement pas d'actions

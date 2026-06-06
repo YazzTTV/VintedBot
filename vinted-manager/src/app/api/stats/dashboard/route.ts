@@ -4,7 +4,7 @@ import prisma from '@/lib/prisma'
 export async function GET() {
   try {
     // Parallel metrics fetching for performance
-    const [aggregateSales, aggregateExpenses, stockCount, last7DaysVentes, realAlerts, botStats, botList] = await Promise.all([
+    const [aggregateSales, aggregateExpenses, stockCount, last7DaysVentes, realAlerts, botStats, botList, commandesAFaireData] = await Promise.all([
       // 1. Global Sales Statistics
       prisma.vente.aggregate({
         _sum: {
@@ -52,6 +52,12 @@ export async function GET() {
       // 7. Individual list of Bots for the detailed grid
       prisma.botAccount.findMany({
         orderBy: { name: 'asc' }
+      }),
+      // 8. Commandes à faire
+      prisma.vente.findMany({
+        where: { statut: 'COMMANDE_A_FAIRE' },
+        include: { article: true },
+        orderBy: { dateVente: 'desc' }
       })
     ])
 
@@ -118,10 +124,29 @@ export async function GET() {
       profit: Number(vals.profit.toFixed(2))
     }))
 
+    const totalPurchase = commandesAFaireData.reduce((acc, v) => acc + Number(v.purchasePriceSnapshot || 0), 0)
+    const globalShipping = totalPurchase > 39 ? 0 : 3.90
+    const shippingPerItem = commandesAFaireData.length > 0 ? globalShipping / commandesAFaireData.length : 0
+
+    const commandesAFaire = commandesAFaireData.map(v => {
+       const purchasePrice = Number(v.purchasePriceSnapshot || 0)
+       const shippingCost = shippingPerItem
+       const estimatedProfit = Number(v.prixVente) - purchasePrice - shippingCost - Number(v.fraisVinted)
+       return {
+         id: v.id,
+         title: v.article?.nom || `Article #${v.articleId.substring(0,5)}`,
+         buyer: v.pseudoAcheteur,
+         price: Number(v.prixVente).toFixed(2),
+         purchasePrice: purchasePrice.toFixed(2),
+         estimatedProfit: estimatedProfit.toFixed(2)
+       }
+    })
+
     // Compose final payload
     return NextResponse.json({
       success: true,
       data: {
+        commandesAFaire,
         caTotal: Number(aggregateSales._sum.prixVente || 0),
         beneficeTotal: Number(aggregateSales._sum.beneficeNet || 0),
         margeMoyenne: Number(aggregateSales._avg.margePct || 0),

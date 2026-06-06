@@ -164,6 +164,22 @@ export async function POST(request: Request) {
       updateCount++
     }
 
+    // 3. Nettoyage : Les annonces en base qui ne sont plus remontées par Vinted ont été supprimées
+    const syncedItemIds = items.map((i: any) => String(i.id))
+    if (syncedItemIds.length > 0) {
+      await prisma.vintedItemMetrics.updateMany({
+        where: {
+          botAccountId: botAccount.id,
+          id: { notIn: syncedItemIds },
+          status: { notIn: ['Supprimé', 'Vendu'] } // Ne pas écraser si déjà marqué
+        },
+        data: {
+          status: 'Supprimé',
+          updatedAt: new Date()
+        }
+      })
+    }
+
     return NextResponse.json({
       success: true,
       data: {

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { fuzzyMatch } from '@/lib/utils'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -75,7 +76,7 @@ export async function POST(request: Request) {
           }
         }
 
-        await prisma.vintedOrderSynced.upsert({
+        const syncedOrder = await prisma.vintedOrderSynced.upsert({
           where: { id: orderId },
           update: {
             title: order.title || "Article Vinted",
@@ -104,6 +105,183 @@ export async function POST(request: Request) {
             createdAtVinted: nativeDate
           }
         })
+
+        // ==========================================
+        // AUTO-RÉCONCILIATION & CRÉATION DE VENTE (Priorités en cascade)
+        // ==========================================
+        if (!syncedOrder.articleId && !["cancelled", "Supprimé", "canceled"].includes(syncedOrder.status.toLowerCase())) {
+          
+          let finalArticleId = null
+          let matchedArticle = null
+          let isUrgence = false
+          let sourcingUrlForUrgence = ""
+
+          // PRIORITÉ 1 : Chercher un article en STOCK (Nom exact ou fuzzy)
+          const stockArticles = await prisma.article.findMany({ where: { statut: "STOCK" } })
+          matchedArticle = stockArticles.find(a => fuzzyMatch(syncedOrder.title, a.nom || "")) ||
+                           stockArticles.find(a => (a.nom || "").toLowerCase().includes(syncedOrder.title.toLowerCase()))
+          
+          // PRIORITÉ 2 : Chercher un article EN_TRANSIT si pas de STOCK
+          if (!matchedArticle) {
+            const transitArticles = await prisma.article.findMany({ where: { statut: "EN_TRANSIT" } })
+            matchedArticle = transitArticles.find(a => fuzzyMatch(syncedOrder.title, a.nom || "")) ||
+                             transitArticles.find(a => (a.nom || "").toLowerCase().includes(syncedOrder.title.toLowerCase()))
+          }
+
+          // PRIORITÉ 3 : Chercher dans le SOURCING et créer une commande d'urgence
+          if (!matchedArticle) {
+             let resolvedSourcingUrl = null;
+             let resolvedTitle = syncedOrder.title;
+
+             // A) Matching EXACT via l'ID Vinted (infaillible)
+             if (syncedOrder.itemId) {
+                 const metrics = await prisma.vintedItemMetrics.findUnique({
+                     where: { id: String(syncedOrder.itemId) }
+                 });
+                 if (metrics && metrics.sourcingUrl) {
+                     resolvedSourcingUrl = metrics.sourcingUrl;
+                     resolvedTitle = metrics.title || syncedOrder.title;
+                 }
+             }
+             
+             // B) Fallback: Matching Flou sur le Sourcing (Risque d'erreur sur les noms génériques)
+             if (!resolvedSourcingUrl) {
+                 const allSourcings = await prisma.sourcingProduct.findMany()
+                 const matchedSourcing = allSourcings.find(s => fuzzyMatch(syncedOrder.title, s.title)) ||
+                                         allSourcings.find(s => s.title.toLowerCase().includes(syncedOrder.title.toLowerCase()))
+                 if (matchedSourcing) {
+                     resolvedSourcingUrl = matchedSourcing.url;
+                     resolvedTitle = matchedSourcing.title;
+                 }
+             }
+
+             if (resolvedSourcingUrl) {
+                isUrgence = true
+                sourcingUrlForUrgence = resolvedSourcingUrl
+                
+                const detectionFournisseur = resolvedSourcingUrl.toLowerCase().includes('shein') ? 'SHEIN' : 'TEMU'
+                const DEFAULT_USER_ID = '4700b998-a7e6-4c52-ac08-0e9893dba2ef'
+                
+                // Recherche d'un panier en cours pour ce fournisseur
+                let panier = await prisma.commandeFournisseur.findFirst({
+                  where: {
+                    fournisseur: detectionFournisseur as any,
+                    statut: 'PANIER'
+                  }
+                });
+                
+                if (!panier) {
+                    const dateStr = new Date().toISOString().split('T')[0];
+                    panier = await prisma.commandeFournisseur.create({
+                      data: {
+                        userId: DEFAULT_USER_ID,
+                        numero: `PANIER_${detectionFournisseur}_${dateStr}`,
+                        fournisseur: detectionFournisseur as any,
+                        dateCommande: new Date(),
+                        prixTotal: 0,
+                        fraisPort: 0,
+                        nbArticles: 0,
+                        statut: 'PANIER',
+                        notes: `Panier automatique généré le ${dateStr}.`
+                      }
+                    });
+                }
+                
+                // On met à jour le nombre d'articles
+                await prisma.commandeFournisseur.update({
+                    where: { id: panier.id },
+                    data: { nbArticles: { increment: 1 } }
+                });
+
+                matchedArticle = await prisma.article.create({
+                  data: {
+                    commandeId: panier.id,
+                    nom: resolvedTitle,
+                    lienProduit: resolvedSourcingUrl,
+                    prixAchatUnitaire: 0,
+                    fraisPortUnitaires: 0,
+                    statut: 'VENDU',
+                    notes: `Article dropshippé d'urgence pour @${syncedOrder.buyerLogin} (Vente: ${syncedOrder.title})`
+                  }
+                })
+             }
+          }
+
+          if (matchedArticle) {
+            finalArticleId = matchedArticle.id
+
+            // Lier l'article à la commande Vinted
+            await prisma.vintedOrderSynced.update({
+              where: { id: syncedOrder.id },
+              data: { articleId: finalArticleId }
+            })
+
+            // Calculs financiers
+            const prixVente = Number(syncedOrder.price)
+            const fraisVinted = 0.70
+            const prixAchat = Number(matchedArticle.prixAchatUnitaire || 0)
+            const fraisPortAchat = Number(matchedArticle.fraisPortUnitaires || 0)
+            // Si Urgence, le coût achat est 0 pour l'instant
+            const coutTotalAchat = prixAchat + fraisPortAchat
+            const beneficeNet = prixVente - coutTotalAchat - fraisVinted
+            const margePct = coutTotalAchat > 0 ? (beneficeNet / coutTotalAchat) * 100 : 100
+
+            // 1. Créer la Vente
+            const newVente = await prisma.vente.create({
+              data: {
+                articleId: finalArticleId,
+                pseudoAcheteur: syncedOrder.buyerLogin || "Inconnu",
+                prixVente: prixVente,
+                fraisVinted: fraisVinted,
+                beneficeNet: beneficeNet,
+                margePct: margePct,
+                dateVente: syncedOrder.createdAtVinted,
+                statut: "A_EXPEDIER",
+                botAccountId: account.id,
+                purchasePriceSnapshot: prixAchat,
+                lienVente: syncedOrder.itemId ? `https://vinted.fr/items/${syncedOrder.itemId}` : null
+              }
+            })
+
+            // 2. Mettre à jour le statut de l'Article (seulement si ce n'est pas déjà fait par l'Urgence)
+            if (!isUrgence) {
+              await prisma.article.update({
+                where: { id: finalArticleId },
+                data: { statut: "VENDU" }
+              })
+            }
+
+            // 3. Créer le Tracking de Colis initial (Départ)
+            let parcel = null
+            if (syncedOrder.trackingCode) {
+              parcel = await prisma.parcelTracking.create({
+                data: {
+                  trackingNumber: syncedOrder.trackingCode,
+                  carrier: "Inconnu",
+                  status: "EN_ATTENTE"
+                }
+              })
+              await prisma.vente.update({
+                where: { id: newVente.id },
+                data: { parcelId: parcel.id }
+              })
+            }
+
+            // 4. Créer l'Expedition
+            await prisma.expedition.create({
+              data: {
+                venteId: newVente.id,
+                numeroBordereau: syncedOrder.trackingCode || null,
+                transporteur: "Inconnu"
+              }
+            })
+
+            console.log(`✅ [AUTO-RECONCILIATION] Vente créée pour l'article: ${matchedArticle.nom} (Urgence: ${isUrgence})`)
+          } else {
+             console.log(`⚠️ [AUTO-RECONCILIATION] ÉCHEC TOTAL: Aucun article STOCK, TRANSIT ou SOURCING trouvé pour: "${syncedOrder.title}"`)
+          }
+        }
+        
         updatedCount++
       } catch (err: any) {
         console.error(`❌ Échec de l'upsert pour la commande Vinted #${order.id}:`, err.message)

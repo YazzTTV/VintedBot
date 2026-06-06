@@ -208,12 +208,23 @@ def _parse_gemini_response(raw_text: str) -> dict | None:
 
 def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr", niche: str = "garment") -> dict | None:
     """
-    Analyse une capture produit Shein via Gemini Web (Edge CDP).
+    Analyse une capture produit Shein via l'API officielle google-genai.
     Retourne un dict {titre_vinted, description_vinted, prompt_image_anglais}
     ou None en cas d'echec.
     Supports multi-language prompt adaptation ("fr", "nl", "lb", etc.)
     """
-    print(f"[Processor] Analyse de l'image via Gemini Web : {image_path} (Taille : {size}, Langue : {language.upper()}, Niche : {niche.upper()})...")
+    import os
+    from google import genai
+    from google.genai import types
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("[Processor] ERREUR : GEMINI_API_KEY introuvable dans .env")
+        return None
+
+    print(f"[Processor] Analyse de l'image via Gemini API Native : {image_path} (Taille : {size}, Langue : {language.upper()}, Niche : {niche.upper()})...")
     
     # --- DEFINITION DU PERSONA ET DES REGLES DE LANGUE ---
     persona = "Tu es une vendeuse reguliere et tres humaine sur Vinted."
@@ -250,49 +261,34 @@ def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr", n
             TAILLE_CIBLE=size
         )
 
-    if not start_edge():
-        print("[Processor] ERREUR : impossible de demarrer Edge.")
+    try:
+        from PIL import Image
+        img = Image.open(image_path)
+    except Exception as e:
+        print(f"[Processor] ERREUR lecture image locale : {e}")
         return None
 
-    with sync_playwright() as p:
-        try:
-            browser, page = open_gemini_page(p)
+    try:
+        client = genai.Client(api_key=api_key)
+        
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=[final_prompt, img],
+        )
+        raw_text = response.text
 
-            # 1. Upload de la capture produit
-            print("[Processor] Upload de la capture produit...")
-            if not upload_files(page, [image_path]):
-                print("[Processor] ERREUR : upload de l'image echoue.")
-                page.close()
-                return None
-
-            # 2. Envoi du prompt d'analyse
-            print("[Processor] Envoi du prompt d'analyse...")
-            type_and_send(page, final_prompt)
-
-            # 3. Attente de la reponse (max 60s pour le texte)
-            wait_for_response(page, timeout_s=60)
-
-            # 4. Extraction du texte de la reponse
-            raw_text = get_last_response_text(page)
-            page.close()
-
-            if not raw_text:
-                print("[Processor] ERREUR : reponse vide.")
-                return None
-
-            # 5. Parsing du JSON
-            result = _parse_gemini_response(raw_text)
-            if result:
-                print(f"[Processor] Analyse reussie : '{result.get('titre_vinted', '?')}'")
-            return result
-
-        except Exception as e:
-            print(f"[Processor] Erreur critique : {e}")
-            try:
-                page.close()
-            except Exception:
-                pass
+        if not raw_text:
+            print("[Processor] ERREUR : reponse vide de l'API.")
             return None
+
+        result = _parse_gemini_response(raw_text)
+        if result:
+            print(f"[Processor] Analyse reussie : '{result.get('titre_vinted', '?')}'")
+        return result
+
+    except Exception as e:
+        print(f"[Processor] Erreur critique API Gemini : {e}")
+        return None
 
 
 if __name__ == "__main__":

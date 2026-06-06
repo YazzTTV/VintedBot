@@ -32,6 +32,7 @@ interface DressingItem {
   favouriteCount: number
   status: string
   url: string
+  sourcingUrl: string | null
   uploadedAtVinted: string
 }
 
@@ -56,11 +57,16 @@ export default function DressingPage() {
   const [accountsLoading, setAccountsLoading] = useState(true)
   const [items, setItems] = useState<DressingItem[]>([])
   const [searchTerm, setSearchTerm] = useState("")
+  const [activeTab, setActiveTab] = useState<'ACTIF' | 'BROUILLON'>('ACTIF')
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [showDropdown, setShowDropdown] = useState(false)
 
   const [showRepostModal, setShowRepostModal] = useState(false)
+  const [showDuplicateModal, setShowDuplicateModal] = useState(false)
+  const [duplicateItemInfo, setDuplicateItemInfo] = useState<DressingItem | null>(null)
+  
   const [repostLoading, setRepostLoading] = useState(false)
+  const [duplicateLoading, setDuplicateLoading] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
 
   const [repostForm, setRepostForm] = useState({
@@ -70,6 +76,12 @@ export default function DressingPage() {
     newPrice: "",
     minDelaySec: 80,
     maxDelaySec: 120
+  })
+
+  const [duplicateForm, setDuplicateForm] = useState({
+    destinationAccount: "",
+    asDraft: false,
+    cropPercent: 0
   })
 
   // Charger les comptes disponibles
@@ -118,35 +130,23 @@ export default function DressingPage() {
     fetchItems()
   }, [selectedAccount])
 
-  // Filtrer les annonces par titre
+  // Filtrer les annonces par titre et statut
   const filteredItems = useMemo(() => {
-    return items.filter(item =>
-      item.title.toLowerCase().includes(searchTerm.toLowerCase())
-    )
-  }, [items, searchTerm])
+    return items.filter(item => {
+      if (item.status === "Supprimé" || item.status === "Vendu") return false;
+      const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase())
+      const isBrouillon = item.status === "Brouillon" || item.status === "Masqué" || item.status?.toLowerCase().includes('hidden') || item.status?.toLowerCase().includes('draft')
+      const matchesTab = activeTab === 'BROUILLON' ? isBrouillon : !isBrouillon
+      return matchesSearch && matchesTab
+    })
+  }, [items, searchTerm, activeTab])
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type })
     setTimeout(() => setToast(null), 3500)
   }
 
-  const toggleItemSelection = (itemId: string) => {
-    const newSelected = new Set(selectedItems)
-    if (newSelected.has(itemId)) {
-      newSelected.delete(itemId)
-    } else {
-      newSelected.add(itemId)
-    }
-    setSelectedItems(newSelected)
-  }
 
-  const toggleSelectAll = () => {
-    if (selectedItems.size === filteredItems.length) {
-      setSelectedItems(new Set())
-    } else {
-      setSelectedItems(new Set(filteredItems.map(item => item.id)))
-    }
-  }
 
   const handleRepostSubmit = async () => {
     if (selectedItems.size === 0) return
@@ -196,6 +196,62 @@ export default function DressingPage() {
       showToast("Erreur reseau ou serveur", "error")
     }
     setRepostLoading(false)
+  }
+
+  const handleDuplicateSubmit = async () => {
+    if (!duplicateItemInfo || !duplicateForm.destinationAccount) return
+
+    setDuplicateLoading(true)
+    try {
+      const res = await fetch('/api/extension/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botAccountName: duplicateForm.destinationAccount,
+          actionType: 'DUPLICATE_ITEM',
+          payload: { 
+            sourceItemId: duplicateItemInfo.id,
+            asDraft: duplicateForm.asDraft,
+            cropPercent: duplicateForm.cropPercent
+          }
+        })
+      })
+      const data = await res.json()
+      if (data.success) {
+        showToast(`Duplication de l'article vers ${duplicateForm.destinationAccount} planifiee`, "success")
+        setShowDuplicateModal(false)
+        setDuplicateItemInfo(null)
+      } else {
+        showToast(data.error || "Erreur lors de la duplication", "error")
+      }
+    } catch (e) {
+      console.error("Action error:", e)
+      showToast("Erreur reseau", "error")
+    }
+    setDuplicateLoading(false)
+  }
+
+  const handleAction = async (item: DressingItem, actionType: string) => {
+    try {
+      const res = await fetch('/api/extension/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          botAccountName: selectedAccount,
+          actionType,
+          payload: { itemId: item.id }
+        })
+      })
+      const data = await res.json()
+      if (data.success) {
+        showToast(`Action ${actionType} planifiee pour ${item.title}`, "success")
+      } else {
+        showToast(data.error || "Erreur lors de la planification de l'action", "error")
+      }
+    } catch (e) {
+      console.error("Action error:", e)
+      showToast("Erreur reseau", "error")
+    }
   }
 
   const formatRelativeDate = (dateString: string) => {
@@ -314,20 +370,43 @@ export default function DressingPage() {
 
       {/* Search & Actions Bar */}
       {!loading && items.length > 0 && (
-        <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-          <div className="relative flex-1 max-w-md">
-            <Search className="w-4 h-4 absolute left-4 top-3.5 text-zinc-500" />
-            <input
-              type="text"
-              placeholder="Rechercher par titre..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 bg-zinc-900/50 border border-zinc-800/80 text-white text-sm rounded-xl placeholder:text-zinc-600 outline-none focus:ring-1 focus:ring-emerald-500/30 focus:border-emerald-500/40 transition-all"
-            />
-          </div>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+            <div className="relative flex-1 max-w-md w-full">
+              <Search className="w-4 h-4 absolute left-4 top-3.5 text-zinc-500" />
+              <input
+                type="text"
+                placeholder="Rechercher par titre..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-11 pr-4 py-3 bg-zinc-900/50 border border-zinc-800/80 text-white text-sm rounded-xl placeholder:text-zinc-600 outline-none focus:ring-1 focus:ring-emerald-500/30 focus:border-emerald-500/40 transition-all"
+              />
+            </div>
 
-          <div className="text-sm text-zinc-500">
-            {filteredItems.length} annonce{filteredItems.length !== 1 ? 's' : ''}
+            <div className="flex bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-1">
+              <button
+                onClick={() => setActiveTab('ACTIF')}
+                className={cn(
+                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors",
+                  activeTab === 'ACTIF' ? "bg-emerald-600 text-white shadow" : "text-zinc-400 hover:text-white"
+                )}
+              >
+                En ligne
+              </button>
+              <button
+                onClick={() => setActiveTab('BROUILLON')}
+                className={cn(
+                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors",
+                  activeTab === 'BROUILLON' ? "bg-emerald-600 text-white shadow" : "text-zinc-400 hover:text-white"
+                )}
+              >
+                Brouillons
+              </button>
+            </div>
+          </div>
+          
+          <div className="text-sm text-zinc-500 text-right">
+            {filteredItems.length} annonce{filteredItems.length !== 1 ? 's' : ''} dans cet onglet
           </div>
         </div>
       )}
@@ -377,43 +456,16 @@ export default function DressingPage() {
         </div>
       ) : (
         <div className="pb-24">
-          {/* Select All Bar */}
-          <div className="flex items-center justify-between mb-6 p-4 bg-zinc-950/40 border border-zinc-800/60 rounded-xl">
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                checked={selectedItems.size === filteredItems.length && filteredItems.length > 0}
-                onChange={toggleSelectAll}
-                className="w-5 h-5 rounded border-zinc-700 bg-zinc-900 cursor-pointer accent-emerald-500"
-              />
-              <label className="text-sm text-zinc-400 font-medium cursor-pointer">
-                {selectedItems.size === filteredItems.length && filteredItems.length > 0
-                  ? "Tout desselectionner"
-                  : "Tout selectionner"}
-              </label>
-            </div>
-          </div>
-
           {/* Items Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
             {filteredItems.map((item) => (
               <div
                 key={item.id}
-                className="group relative bg-zinc-950/60 border border-zinc-800/60 rounded-2xl overflow-hidden hover:border-emerald-500/30 transition-all hover:shadow-lg hover:shadow-emerald-500/10 cursor-pointer"
-                onClick={() => toggleItemSelection(item.id)}
+                className="group relative bg-zinc-950/60 border border-zinc-800/60 rounded-2xl overflow-hidden hover:border-emerald-500/30 transition-all hover:shadow-lg hover:shadow-emerald-500/10"
               >
-                {/* Checkbox overlay */}
-                <div className="absolute top-3 left-3 z-10">
-                  <input
-                    type="checkbox"
-                    checked={selectedItems.has(item.id)}
-                    onChange={() => {}} // handled by parent click
-                    className="w-5 h-5 rounded border-zinc-700 bg-zinc-900 cursor-pointer accent-emerald-500"
-                    onClick={(e) => e.stopPropagation()}
-                  />
-                </div>
 
-                {/* Photo */}
+
+                {/* Photo & Actions Overlay */}
                 <div className="aspect-[3/4] bg-zinc-900 overflow-hidden relative flex items-center justify-center">
                   {item.photoUrl ? (
                     <img
@@ -427,8 +479,48 @@ export default function DressingPage() {
 
                   {/* Selection highlight */}
                   {selectedItems.has(item.id) && (
-                    <div className="absolute inset-0 bg-emerald-500/20 border-2 border-emerald-500/50" />
+                    <div className="absolute inset-0 bg-emerald-500/20 border-2 border-emerald-500/50 z-0" />
                   )}
+
+                  {/* Hover Buttons */}
+                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-center gap-2 p-4 z-10">
+                    {activeTab === 'ACTIF' ? (
+                      <>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setSelectedItems(new Set([item.id])); setShowRepostModal(true); }}
+                          className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors"
+                        >
+                          Reposter
+                        </button>
+                        <button
+                          onClick={(e) => { 
+                            e.stopPropagation(); 
+                            setDuplicateItemInfo(item);
+                            // Selectionner le premier compte par defaut si possible
+                            const otherAccounts = accounts.filter(a => a.name !== selectedAccount);
+                            setDuplicateForm(prev => ({ ...prev, destinationAccount: otherAccounts.length > 0 ? otherAccounts[0].name : "" }));
+                            setShowDuplicateModal(true); 
+                          }}
+                          className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-colors"
+                        >
+                          Dupliquer
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleAction(item, 'DELETE_ITEM'); }}
+                          className="w-full py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-lg transition-colors"
+                        >
+                          Supprimer
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleAction(item, 'PUBLISH_DRAFT'); }}
+                        className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors"
+                      >
+                        Publier en ligne
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Info */}
@@ -596,6 +688,116 @@ export default function DressingPage() {
                     </>
                   ) : (
                     "Lancer la Republication"
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Duplicate Modal */}
+      {showDuplicateModal && duplicateItemInfo && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 backdrop-blur-md bg-black/60 animate-in fade-in duration-200">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-3xl w-full max-w-md p-8 shadow-2xl relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-indigo-500" />
+
+            <button
+              onClick={() => {
+                setShowDuplicateModal(false);
+                setDuplicateItemInfo(null);
+              }}
+              className="absolute right-4 top-4 p-2 text-zinc-500 hover:text-white transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2.5 bg-blue-500/10 rounded-xl text-blue-500">
+                <Shirt className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-xl font-bold text-white">Dupliquer l'annonce</h3>
+                <p className="text-xs text-zinc-500 mt-0.5 line-clamp-1">{duplicateItemInfo.title}</p>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              {/* Destination Account */}
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-zinc-400">Compte de destination</label>
+                <select
+                  value={duplicateForm.destinationAccount}
+                  onChange={(e) => setDuplicateForm({...duplicateForm, destinationAccount: e.target.value})}
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white outline-none focus:border-blue-500/30 transition-all appearance-none"
+                >
+                  <option value="" disabled>Sélectionner un compte</option>
+                  {accounts.filter(a => a.name !== selectedAccount).map(acc => (
+                    <option key={acc.name} value={acc.name}>
+                      {acc.vintedUsername}
+                    </option>
+                  ))}
+                </select>
+                {accounts.filter(a => a.name !== selectedAccount).length === 0 && (
+                  <p className="text-xs text-red-400 mt-1">Vous n'avez pas d'autre compte configuré.</p>
+                )}
+              </div>
+
+              {/* Status Toggle */}
+              <div className="flex items-center justify-between p-4 bg-zinc-900/50 border border-zinc-800 rounded-xl">
+                <div>
+                  <label className="text-sm font-bold text-white block">Garder en brouillon</label>
+                  <span className="text-xs text-zinc-500">Ne pas publier immédiatement l'annonce</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={duplicateForm.asDraft}
+                  onChange={(e) => setDuplicateForm({...duplicateForm, asDraft: e.target.checked})}
+                  className="w-5 h-5 rounded border-zinc-700 bg-zinc-900 cursor-pointer accent-blue-500"
+                />
+              </div>
+
+              {/* Crop Percent */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-sm font-medium text-zinc-400">Recadrage des photos</label>
+                  <span className="text-sm font-bold text-white">{duplicateForm.cropPercent}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="20"
+                  step="1"
+                  value={duplicateForm.cropPercent}
+                  onChange={(e) => setDuplicateForm({...duplicateForm, cropPercent: parseInt(e.target.value)})}
+                  className="w-full h-2 bg-zinc-900 border border-zinc-800 rounded-full appearance-none cursor-pointer accent-blue-500"
+                />
+              </div>
+
+              {/* Buttons */}
+              <div className="pt-2 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowDuplicateModal(false);
+                    setDuplicateItemInfo(null);
+                  }}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-900 text-zinc-400 text-sm font-medium border border-zinc-800 hover:bg-zinc-800 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDuplicateSubmit}
+                  disabled={duplicateLoading || !duplicateForm.destinationAccount}
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold shadow-lg shadow-blue-900/20 hover:bg-blue-500 transition-colors flex justify-center items-center gap-2 disabled:opacity-50"
+                >
+                  {duplicateLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Envoi...
+                    </>
+                  ) : (
+                    "Dupliquer"
                   )}
                 </button>
               </div>

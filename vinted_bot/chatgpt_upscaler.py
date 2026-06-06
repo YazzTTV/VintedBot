@@ -244,9 +244,9 @@ async def task_generate_hanger(context, original_image_path, hanger_template_pat
         
         prompt = (
             "Utilise les deux images fournies. La première image montre le vêtement cible à reproduire. "
-            "La deuxième image est une image de référence montrant un cintre noir suspendu contre un mur blanc. "
-            "Génère une photo réaliste du vêtement de la première image suspendu exactement sur le cintre noir de la deuxième image, "
-            "contre le même mur blanc. Conserve fidèlement la coupe, la couleur, les motifs et la matière du vêtement."
+            "La deuxième image est une image de référence montrant un cintre dans un décor spécifique. "
+            "Génère une photo réaliste du vêtement de la première image suspendu exactement sur le cintre de la deuxième image, "
+            "dans le même décor/arrière-plan que la deuxième image. Conserve fidèlement la coupe, la couleur, les motifs et la matière du vêtement."
         )
         
         success = False
@@ -446,6 +446,108 @@ async def task_generate_stroller_with_dog(context, input_image_path, output_path
             pass
     return False
 
+async def task_generate_folded(context, input_image_path, template_path, output_path, prompt_anglais, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files([template_path, input_image_path])
+        await asyncio.sleep(5)
+        
+        surfaces = [
+            "un sol en parquet de chêne clair avec des veines de bois naturelles",
+            "un tapis blanc moelleux et propre en fausse fourrure",
+            "un dessus de lit en lin ou coton blanc légèrement froissé",
+            "une grande table en bois massif épurée"
+        ]
+        surface_choice = random.choice(surfaces)
+        prompt = (
+            f"Utilise les deux images fournies. La première image (image 1) montre un motif de sol ou de surface de référence. "
+            f"La deuxième image (image 2) montre un vêtement ({prompt_anglais}).\n"
+            f"Génère une seule photo ultra réaliste et spontanée en vue du dessus (flat lay), où le vêtement de l'image 2 est très proprement et joliment plié (façon boutique) et posé sur {surface_choice}.\n"
+            "Ajoute des ombres naturelles et subtiles sous le vêtement pour donner du relief. "
+            "IMPORTANT : Il ne doit y avoir aucun mannequin, aucun corps humain ni personne sur l'image. "
+            "L'image doit être au format vertical portrait 3:4 et parfaitement centrée."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Folded] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
+async def task_generate_selfie_hand_in_hair(context, input_path, output_path, lock=None):
+    page = await context.new_page()
+    try:
+        await page.goto("https://chatgpt.com", timeout=60000)
+        await asyncio.sleep(3)
+        
+        file_input = page.locator("input[type=file][accept*='image']").first
+        await file_input.set_input_files(input_path)
+        await asyncio.sleep(5)
+        
+        prompt = (
+            "Fais une version de cette image (selfie dans le miroir) où la fille prend toujours la photo avec son téléphone, mais avec sa main libre passée dans ses cheveux ou touchant ses cheveux.\n"
+            "Garde exactement la même personne, le même visage, la même tenue (le même vêtement que l'image de base), le même téléphone et le même arrière-plan de la pièce.\n"
+            "La pose doit être naturelle et spontanée. Aucun texte ni filigrane. L'image doit être au format vertical portrait 3:4."
+        )
+        
+        success = False
+        async with AsyncLockWrapper(lock, page):
+            prompt_textarea = page.locator("#prompt-textarea")
+            await prompt_textarea.fill(prompt)
+            
+            send_button = page.locator('button[data-testid="send-button"]')
+            try:
+                await send_button.wait_for(state="visible", timeout=10000)
+                await send_button.click()
+            except:
+                await prompt_textarea.press("Enter")
+                
+            target_img = await wait_for_chatgpt_image_async(page)
+            if target_img:
+                success = await _save_chatgpt_image_async(page, target_img, output_path)
+                
+        if success:
+            await page.close()
+            crop_black_borders(output_path, output_path)
+            strip_metadata(output_path)
+            return True
+        await page.close()
+    except Exception as e:
+        print(f"[ChatGPT Selfie Hair] Erreur : {e}")
+        try:
+            await page.close()
+        except:
+            pass
+    return False
+
 async def generate_all_images_parallel_async(
     niche: str,
     file_path: str,
@@ -471,7 +573,9 @@ async def generate_all_images_parallel_async(
         "selfie_upscaled": None,
         "flat_lay_upscaled": None,
         "profile_upscaled": None,
-        "hanger_upscaled": None
+        "hanger_upscaled": None,
+        "folded_upscaled": None,
+        "selfie_hand_in_hair_upscaled": None
     }
     
     async with async_playwright() as p:
@@ -514,13 +618,31 @@ async def generate_all_images_parallel_async(
                 if res3:
                     results["hanger_upscaled"] = hanger_path
                 
-                # Étape séquentielle secondaire : Génération de l'image de profil (dépend du Selfie)
+                # Étape séquentielle secondaire : Génération de profil, article plié, et selfie cheveux
+                tasks_batch_2 = []
+                profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
+                folded_path = os.path.join(product_dir, "folded_upscaled.jpg")
+                selfie_hair_path = os.path.join(product_dir, "selfie_hand_in_hair_upscaled.jpg")
+                
+                print("[ChatGPT Parallel] Lancement du deuxième batch (Profil, Plié, Selfie Cheveux)...")
                 if res1:
-                    profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
-                    print("[ChatGPT Parallel] Selfie OK. Lancement de la génération de profil...")
-                    res4 = await task_generate_profile(context, selfie_path, profile_path, dalle_lock)
-                    if res4:
-                        results["profile_upscaled"] = profile_path
+                    tasks_batch_2.append(task_generate_profile(context, selfie_path, profile_path, dalle_lock))
+                    tasks_batch_2.append(task_generate_selfie_hand_in_hair(context, selfie_path, selfie_hair_path, dalle_lock))
+                else:
+                    async def dummy_task(): return False
+                    tasks_batch_2.append(dummy_task())
+                    tasks_batch_2.append(dummy_task())
+                    
+                tasks_batch_2.append(task_generate_folded(context, file_path, floor_template_path, folded_path, prompt, dalle_lock))
+                
+                res4, res5, res6 = await asyncio.gather(*tasks_batch_2)
+                
+                if res1 and res4:
+                    results["profile_upscaled"] = profile_path
+                if res1 and res5:
+                    results["selfie_hand_in_hair_upscaled"] = selfie_hair_path
+                if res6:
+                    results["folded_upscaled"] = folded_path
             
             await browser.close()
             print("[ChatGPT Parallel] Fin du pipeline asynchrone.")

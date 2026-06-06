@@ -19,6 +19,7 @@ enum Fournisseur {
 }
 
 enum StatutCommande {
+  PANIER
   COMMANDEE
   EN_TRANSIT
   RECUE
@@ -84,6 +85,7 @@ model Article {
   statut              StatutArticle       @default(STOCK)
   dateAjoutStock      DateTime            @default(now())
   nom                 String?
+  taille              String?
   notes               String?
   vente               Vente?
   vintedOrderSynced   VintedOrderSynced?
@@ -108,6 +110,9 @@ model Vente {
   expedition            Expedition?
   parcelId              String?
   parcel                ParcelTracking?  @relation(fields: [parcelId], references: [id])
+  purchasePriceSnapshot Decimal?         @db.Decimal(10, 2)
+  shippingCostCalculated Decimal?        @db.Decimal(10, 2)
+  whatsappLogs          WhatsappLog[]
 }
 
 model Expedition {
@@ -324,5 +329,15 @@ model SpyCategory {
   name        String
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
+}
+
+model WhatsappLog {
+  id             String   @id @default(uuid())
+  venteId        String?
+  vente          Vente?   @relation(fields: [venteId], references: [id])
+  message        String   @db.Text
+  direction      String   // "OUTBOUND", "INBOUND"
+  status         String   // "SENT", "DELIVERED", "READ", "FAILED"
+  createdAt      DateTime @default(now())
 }
 

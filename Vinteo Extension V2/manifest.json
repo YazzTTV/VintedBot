@@ -1,0 +1,170 @@
+{
+  "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtKLHcrYq6QNL3KRP+A1dmk4vUc3GMr0rxd7F0ACVkeY04MlXKkrKmvdagnbc0lp2Xl2zUIIGuE/7zWhyuo8EEFuZxEouTgZJqjd5IwbDj8/vVvz+deEGkqzjFT+NYIDZrl51/GLD3wBT0fYXPdqcwZB6JPxiooALbENXahGT1puSdWaACQSVyeZQjpUxl32Q+TzDhFFKOPRUYezZKzWdtAbbbJ9VAYq7P1elzRy6YA9XoNEoLcLabcLft+IcOCszdgWpaq+5gRahvJeEzLB5FXmsp4edkWY2HN8MfN0IppaWYsSwjEFC5ifz17hRQG+72CKN6UkiapzGo+QBvzUVmwIDAQAB",
+  "name": "__MSG_extName__",
+  "version": "1.6",
+  "version_name": "1.6",
+  "default_locale": "fr",
+  "homepage_url": "https://vinteo.xyz",
+  "description": "__MSG_extDescription__",
+  "permissions": [
+    "tabs",
+    "storage",
+    "cookies",
+    "alarms",
+    "notifications",
+    "offscreen",
+    "declarativeNetRequestWithHostAccess"
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "label_cors",
+        "enabled": true,
+        "path": "rules_label_bucket.json"
+      },
+      {
+        "id": "vinted_images_cors",
+        "enabled": true,
+        "path": "rules_vinted_images.json"
+      }
+    ]
+  },
+  "host_permissions": [
+    "https://*.vinted.fr/*",
+    "https://*.vinted.de/*",
+    "https://*.vinted.es/*",
+    "https://*.vinted.it/*",
+    "https://*.vinted.pt/*",
+    "https://*.vinted.be/*",
+    "https://*.vinted.nl/*",
+    "https://*.vinted.lu/*",
+    "https://*.vinted.pl/*",
+    "https://*.vinted.cz/*",
+    "https://*.vinted.sk/*",
+    "https://*.vinted.lt/*",
+    "https://*.vinted.lv/*",
+    "https://*.vinted.at/*",
+    "https://*.vinted.ch/*",
+    "https://*.vinted.dk/*",
+    "https://*.vinted.fi/*",
+    "https://*.vinted.se/*",
+    "https://*.vinted.hu/*",
+    "https://*.vinted.ro/*",
+    "https://*.vinted.si/*",
+    "https://vinteo.xyz/*",
+    "https://svc-shipping-labels.s3.eu-central-1.amazonaws.com/*",
+    "https://images1.vinted.net/*",
+    "https://*.shein.com/*",
+    "https://*.temu.com/*",
+    "https://*.aliexpress.com/*"
+  ],
+  "externally_connectable": {
+    "matches": [
+      "https://vinteo.xyz/*"
+    ]
+  },
+  "background": {
+    "service_worker": "background/sw-wrapper.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.vinted.fr/*",
+        "https://www.vinted.de/*",
+        "https://www.vinted.es/*",
+        "https://www.vinted.it/*",
+        "https://www.vinted.pt/*",
+        "https://www.vinted.be/*",
+        "https://www.vinted.nl/*",
+        "https://www.vinted.lu/*",
+        "https://www.vinted.pl/*",
+        "https://www.vinted.cz/*",
+        "https://www.vinted.sk/*",
+        "https://www.vinted.lt/*",
+        "https://www.vinted.lv/*",
+        "https://www.vinted.at/*",
+        "https://www.vinted.ch/*",
+        "https://www.vinted.dk/*",
+        "https://www.vinted.fi/*",
+        "https://www.vinted.se/*",
+        "https://www.vinted.hu/*",
+        "https://www.vinted.ro/*",
+        "https://www.vinted.si/*"
+      ],
+      "js": [
+        "content/vinted-api.js",
+        "content/widget.js",
+        "content/restock-runner.js",
+        "content/scheduler-runner.js"
+      ],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "https://vinteo.xyz/*"
+      ],
+      "js": [
+        "content/sync-session.js",
+        "content/force-session-sync.js"
+      ],
+      "run_at": "document_end"
+    },
+    {
+      "matches": [
+        "https://*.shein.com/*",
+        "https://*.temu.com/*",
+        "https://*.aliexpress.com/*"
+      ],
+      "js": [
+        "content/product-scraper.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Vinteo",
+    "default_icon": {
+      "16": "images/toolbar-16.png",
+      "24": "images/toolbar-24.png",
+      "32": "images/toolbar-32.png",
+      "48": "images/toolbar-48.png"
+    }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "content/vinteo-fetch-main.js"
+      ],
+      "matches": [
+        "https://*.vinted.fr/*",
+        "https://*.vinted.de/*",
+        "https://*.vinted.es/*",
+        "https://*.vinted.it/*",
+        "https://*.vinted.pt/*",
+        "https://*.vinted.be/*",
+        "https://*.vinted.nl/*",
+        "https://*.vinted.lu/*",
+        "https://*.vinted.pl/*",
+        "https://*.vinted.cz/*",
+        "https://*.vinted.sk/*",
+        "https://*.vinted.lt/*",
+        "https://*.vinted.lv/*",
+        "https://*.vinted.at/*",
+        "https://*.vinted.ch/*",
+        "https://*.vinted.dk/*",
+        "https://*.vinted.fi/*",
+        "https://*.vinted.se/*",
+        "https://*.vinted.hu/*",
+        "https://*.vinted.ro/*",
+        "https://*.vinted.si/*"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "images/icon-16.png",
+    "32": "images/icon-32.png",
+    "48": "images/icon-48.png",
+    "128": "images/icon-128.png"
+  }
+}

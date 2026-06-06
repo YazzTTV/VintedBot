@@ -546,3 +546,145 @@ async function repostItemREST(itemId, options = {}) {
     };
 }
 
+/**
+ * 👯 DUPLICATION INTER-COMPTES : Clone un article sans supprimer l'original.
+ * Peut être publié immédiatement ou sauvegardé comme brouillon.
+ * @param {string|number} itemId L'identifiant de l'article source.
+ * @param {Object} options Options de duplication :
+ *   - asDraft {boolean} : Ne pas publier, garder en brouillon (défaut: false)
+ *   - cropPercent {number} : Pourcentage de rognage
+ */
+async function duplicateItemREST(itemId, options = {}) {
+    console.log(`👯 Démarrage de la duplication de l'article #${itemId}...`);
+    const asDraft = options.asDraft || false;
+    const cropPercent = options.cropPercent;
+
+    // ÉTAPE 1 : Récupérer les détails de l'annonce source
+    let itemRes = await vintedFetch(`/api/v2/items/${itemId}`);
+    if (!itemRes.success) {
+        throw new Error(`Impossible de lire l'article source ${itemId} (HTTP ${itemRes.status}). Est-il bien en ligne ?`);
+    }
+
+    const original = itemRes.data.item || itemRes.data;
+    if (!original) {
+        throw new Error("Format de réponse inconnu lors de la lecture de l'article source.");
+    }
+
+    console.log(`📖 Analyse de l'annonce source : "${original.title}"`);
+
+    // ÉTAPE 2 : Récupérer les photos
+    const originalPhotos = original.photos || [];
+    const newPhotoIds = [];
+
+    if (originalPhotos.length === 0) {
+        throw new Error("L'annonce source ne contient aucune photo.");
+    }
+
+    for (let i = 0; i < originalPhotos.length; i++) {
+        const photoObj = originalPhotos[i];
+        const photoUrl = photoObj.full_size_url || photoObj.url;
+        if (!photoUrl) continue;
+
+        try {
+            console.log(`📸 Copie de la photo ${i + 1}/${originalPhotos.length}...`);
+            const fetchPhoto = await fetch(photoUrl);
+            const photoBlob = await fetchPhoto.blob();
+
+            const processedBlob = await cropImageOffscreen(photoBlob, cropPercent);
+            const newId = await uploadPhotoToVinted(processedBlob, `duplicate_${i}.jpg`);
+            newPhotoIds.push({ id: newId, orientation: 0 });
+
+            await new Promise(r => setTimeout(r, 1200));
+        } catch (err) {
+            console.error(`⚠️ Échec copie photo #${i} :`, err);
+        }
+    }
+
+    if (newPhotoIds.length === 0) {
+        throw new Error("Échec critique : Aucune photo n'a pu être uploadée.");
+    }
+
+    // ÉTAPE 3 : Payload de l'annonce
+    const draftPayload = {
+        title: original.title,
+        description: original.description || "",
+        catalog_id: original.catalog_id,
+        brand_id: original.brand_id,
+        size_id: original.size_id,
+        status_id: original.status_id,
+        package_size_id: original.package_size_id,
+        color_ids: original.color_ids || [original.color1_id, original.color2_id].filter(Boolean),
+        price: parseFloat(original.price_numeric || original.price || 0),
+        currency: original.currency || "EUR",
+        assigned_photos: newPhotoIds
+    };
+
+    console.log("📝 Création du brouillon local...");
+    const draftUuid = generateUUID();
+    const draftWrapper = {
+        draft: Object.assign({
+            id: null,
+            currency: "EUR",
+            temp_uuid: draftUuid,
+            is_unisex: false,
+            shipment_prices: { domestic: null, international: null },
+            measurement_length: null,
+            measurement_width: null,
+            manufacturer: null,
+            model: null
+        }, draftPayload),
+        feedback_id: null,
+        parcel: null,
+        upload_session_id: draftUuid
+    };
+
+    const draftRes = await vintedFetch("/api/v2/item_upload/drafts", {
+        method: "POST",
+        body: JSON.stringify(draftWrapper)
+    });
+
+    if (!draftRes.success) {
+        throw new Error(`Erreur création Draft (HTTP ${draftRes.status})`);
+    }
+
+    const createdDraft = draftRes.data.draft || draftRes.data;
+    const draftId = createdDraft.id;
+
+    if (asDraft) {
+        console.log(`✅ Duplication réussie ! Sauvegardé en brouillon #${draftId}`);
+        return { success: true, newId: draftId, isDraft: true };
+    }
+
+    // Publication immédiate
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    console.log("🚀 Validation et mise en ligne du duplicata...");
+    const completionWrapper = {
+        draft: createdDraft,
+        feedback_id: null,
+        parcel: null,
+        push_up: false,
+        upload_session_id: createdDraft.temp_uuid || draftUuid
+    };
+
+    const pubRes = await vintedFetch(`/api/v2/item_upload/drafts/${draftId}/completion`, {
+        method: "POST",
+        body: JSON.stringify(completionWrapper)
+    });
+
+    if (!pubRes.success) {
+        throw new Error(`Erreur finalisation publication (HTTP ${pubRes.status})`);
+    }
+
+    const finalItem = pubRes.data.item || pubRes.data;
+    const finalId = finalItem.id || draftId;
+    
+    const baseUrl = await getVintedBaseUrl();
+    console.log(`🎉 Duplicata en ligne ! ID : ${finalId}`);
+    return {
+        success: true,
+        newId: finalId,
+        url: `${baseUrl}/items/${finalId}`,
+        isDraft: false
+    };
+}

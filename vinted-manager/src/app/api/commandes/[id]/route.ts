@@ -35,6 +35,7 @@ export async function PATCH(
           numero,
           fournisseur,
           notes,
+          statut: 'COMMANDEE',
           dateCommande: dateCommande ? new Date(dateCommande) : undefined,
           prixTotal: prixTotal !== undefined ? parseFloat(prixTotal) : undefined,
           fraisPort: fraisPort !== undefined ? parseFloat(fraisPort) : undefined,

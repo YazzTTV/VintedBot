@@ -306,6 +306,64 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- 🛍️ ACHATS SHEIN LOGS ---
+    function renderSheinLogs() {
+        const logContainer = document.getElementById('shein-orders-log');
+        if (!logContainer) return;
+        
+        chrome.storage.local.get(['sheinLogs'], (res) => {
+            const logs = res.sheinLogs || [];
+            if (logs.length === 0) {
+                logContainer.innerHTML = '<div class="empty-logs">Aucun article ajouté au panier récemment.</div>';
+                return;
+            }
+            
+            logContainer.innerHTML = '';
+            // Afficher du plus récent au plus ancien
+            [...logs].reverse().forEach(log => {
+                const logEl = document.createElement('div');
+                logEl.className = 'log-entry';
+                
+                const timeStr = new Date(log.timestamp).toLocaleTimeString('fr-FR', { hour: '2-digit', minute:'2-digit', second:'2-digit' });
+                
+                let icon = '🛒';
+                let colorClass = 'success';
+                let statusBadge = `<span style="background: rgba(16, 185, 129, 0.15); color: #34d399; padding: 2px 6px; border-radius: 4px; font-size: 9px; border: 1px solid rgba(16, 185, 129, 0.3);">AJOUTÉ</span>`;
+                
+                if (log.status === "ERROR") {
+                    icon = '❌';
+                    colorClass = 'error';
+                    statusBadge = `<span style="background: rgba(239, 68, 68, 0.15); color: #f87171; padding: 2px 6px; border-radius: 4px; font-size: 9px; border: 1px solid rgba(239, 68, 68, 0.3);">ERREUR</span>`;
+                }
+                
+                logEl.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
+                        <div style="font-weight: 600; font-size: 11px; display: flex; align-items: center; gap: 6px;">
+                            <span>${icon}</span>
+                            <a href="${log.url}" target="_blank" style="color: #cbd5e1; text-decoration: none; border-bottom: 1px dotted #64748b; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${log.title || 'Article Shein'}</a>
+                        </div>
+                        <div style="font-size: 10px; color: #64748b;">${timeStr}</div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px;">
+                        <span style="font-size: 10px; color: #94a3b8; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 4px;">Taille: ${log.taille || '?'}</span>
+                        ${statusBadge}
+                    </div>
+                    ${log.error ? `<div style="margin-top: 6px; font-size: 9px; color: #ef4444; background: rgba(239,68,68,0.1); padding: 4px; border-radius: 4px;">${log.error}</div>` : ''}
+                `;
+                
+                logContainer.appendChild(logEl);
+            });
+        });
+    }
+
+    // Refresh logs on load and when tab is clicked
+    renderSheinLogs();
+    const sheinTabBtn = document.querySelector('[data-target="tab-shein-orders"]');
+    if (sheinTabBtn) {
+        sheinTabBtn.addEventListener('click', renderSheinLogs);
+    }
+
+
     const syncFinanceBtn = document.getElementById('sync-finance-btn');
     const syncStatusDiv = document.getElementById('sync-status');
     if (syncFinanceBtn && syncStatusDiv) {

@@ -48,6 +48,7 @@ export async function GET(request: Request) {
         favouriteCount: true,
         status: true,
         url: true,
+        sourcingUrl: true,
         uploadedAtVinted: true
       }
     })
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
       favouriteCount: item.favouriteCount,
       status: item.status,
       url: item.url,
+      sourcingUrl: item.sourcingUrl,
       uploadedAtVinted: item.uploadedAtVinted
     }))
 

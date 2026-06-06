@@ -25,9 +25,9 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
         
     # Liste des images humanisées (ou brutes si non humanisées)
     images = []
-    image_names = ["selfie_upscaled.jpg", "flat_lay_upscaled.jpg", "profile_upscaled.jpg", "hanger_upscaled.jpg"]
+    image_names = ["selfie_upscaled.jpg", "profile_upscaled.jpg", "selfie_hand_in_hair_upscaled.jpg", "flat_lay_upscaled.jpg", "hanger_upscaled.jpg", "folded_upscaled.jpg"]
     # Fallbacks si pas d'image upscalée
-    fallback_names = ["selfie.jpg", "flat_lay.jpg", "profile.jpg", "hanger.jpg"]
+    fallback_names = ["selfie.jpg", "profile.jpg", "selfie_hand_in_hair.jpg", "flat_lay.jpg", "hanger.jpg", "folded.jpg"]
     
     for name in image_names:
         img_path = os.path.join(product_dir, name)
@@ -62,26 +62,13 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
     domain = vinted_domains.get(config.language.lower(), "vinted.fr")
     upload_url = f"https://www.{domain}/items/new"
     
-    print(f"[Publisher] Lancement de Brave avec le profil {config.brave_profile}...")
-    
-    brave_path_x86 = r"C:\Program Files (x86)\BraveSoftware\Brave-Browser\Application\brave.exe"
-    brave_path_x64 = r"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe"
-    brave_executable = brave_path_x86 if os.path.exists(brave_path_x86) else brave_path_x64
-    
-    user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data")
+    cdp_port = getattr(config, 'cdp_port', 9222)
+    print(f"[Publisher] Connexion à Brave sur le port CDP {cdp_port} pour le profil {config.brave_profile}...")
     
     with sync_playwright() as p:
         try:
-            context = p.chromium.launch_persistent_context(
-                user_data_dir=user_data_dir,
-                executable_path=brave_executable,
-                args=[
-                    f"--profile-directory={config.brave_profile}",
-                    "--disable-blink-features=AutomationControlled"
-                ],
-                headless=False, # Passer à True si VPS 100% headless
-                viewport={'width': 1280, 'height': 800}
-            )
+            browser = p.chromium.connect_over_cdp(f"http://localhost:{cdp_port}")
+            context = browser.contexts[0]
             page = context.new_page()
             
             print(f"[Publisher] Navigation vers Vinted ({upload_url})...")
@@ -252,11 +239,20 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
                     print("[Publisher] [WARN] Bouton de sauvegarde de brouillon introuvable.")
             else:
                 print("[Publisher] Formulaire rempli. Le navigateur reste ouvert pour ta validation.")
+            
+            if auto_submit or save_draft:
+                print("[Publisher] Fermeture de l'onglet de publication...")
+                page.close()
                 
             return True
             
         except Exception as e:
             print(f"[Publisher] [ERROR] Une erreur est survenue lors de la publication : {e}")
+            try:
+                if 'page' in locals() and page:
+                    page.close()
+            except Exception:
+                pass
             return False
 
 if __name__ == "__main__":

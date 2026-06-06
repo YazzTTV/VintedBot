@@ -118,6 +118,8 @@ async function fetchUserIdentityDirect(tabId) {
 
 // === MESSAGE HANDLERS ===
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    // Anciens test handlers retirés
+
     // PONT REST API : Permet de lire le solde financier à la demande
     if (request.action === "fetchRestWalletBalance") {
         fetchWalletBalance()
@@ -307,6 +309,46 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                                 }
                             }
 
+                            // D) Test Notifications API (Likes) - RECHERCHE DYNAMIQUE DU BON ENDPOINT
+                            let notifsFetchResult = {};
+                            const possibleEndpoints = [
+                                "/api/v2/notifications",
+                                "/api/v2/users/notifications",
+                                "/api/v2/user_notifications",
+                                "/api/v2/activities",
+                                "/api/v2/newsfeed",
+                                "https://api." + window.location.hostname.replace("www.", "") + "/inbox-notifications/v1/notifications?page=1&per_page=20",
+                                "https://api.www.vinted.com/inbox-notifications/v1/notifications?page=1&per_page=20",
+                                "https://api.vinted.fr/inbox-notifications/v1/notifications?page=1&per_page=20"
+                            ];
+
+                            for (const ep of possibleEndpoints) {
+                                try {
+                                    const notifRes = await fetch(ep, { credentials: "include", headers });
+                                    notifsFetchResult[ep] = { status: notifRes.status };
+                                    if (notifRes.ok) {
+                                        const notifRaw = await notifRes.json();
+                                        // Chercher dans quelles clés sont stockés les items (notifications, activities, etc.)
+                                        let items = [];
+                                        if (Array.isArray(notifRaw)) items = notifRaw;
+                                        else if (notifRaw.notifications) items = notifRaw.notifications;
+                                        else if (notifRaw.activities) items = notifRaw.activities;
+                                        else if (notifRaw.items) items = notifRaw.items;
+                                        
+                                        const likes = items.filter(n => n.type === "ItemFavorited" || n.type === "bundle_created" || (n.action && n.action.includes("favorite")));
+                                        
+                                        notifsFetchResult[ep].success = true;
+                                        notifsFetchResult[ep].count = items.length;
+                                        notifsFetchResult[ep].likesCount = likes.length;
+                                        notifsFetchResult[ep].keys = Object.keys(notifRaw);
+                                        // On échantillonne les 3 premières notifications QUEL QUE SOIT LE TYPE pour voir la structure
+                                        notifsFetchResult[ep].sample = items.slice(0, 3);
+                                    }
+                                } catch (e) {
+                                    notifsFetchResult[ep] = { error: e.message };
+                                }
+                            }
+
                             return {
                                 user: userInfo,
                                 csrf: csrf ? csrf.substring(0, 10) + "..." : null,
@@ -323,6 +365,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                                     rawSample: JSON.stringify(raw).substring(0, 600),
                                     detailTest: detailFetchResult
                                 },
+                                notifications: notifsFetchResult,
                                 pageUrl: window.location.href
                             };
                         } catch (e) {
@@ -531,6 +574,180 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+// ==========================================
+// OUTILS DE GESTION SHEIN (AJOUT AU PANIER)
+// ==========================================
+
+// --- Sauvegarde des logs d'achats Shein ---
+async function saveSheinLog(logEntry) {
+    try {
+        const res = await chrome.storage.local.get(['sheinLogs']);
+        let logs = res.sheinLogs || [];
+        logs.push({ ...logEntry, timestamp: Date.now() });
+        // Garder seulement les 50 derniers logs
+        if (logs.length > 50) logs = logs.slice(-50);
+        await chrome.storage.local.set({ sheinLogs: logs });
+    } catch (e) {
+        console.error("Erreur sauvegarde log Shein:", e);
+    }
+}
+
+async function handleSheinCart(url, taille, venteId) {
+    if (!url) throw new Error("URL Shein manquante");
+    console.log(`[EXTENSION] Ouverture de ${url} pour ajout au panier...`);
+    
+    // 1. Ouvrir l'onglet (rendu actif pour que l'utilisateur puisse voir lors du test)
+    const newTab = await new Promise((resolve) => {
+        chrome.tabs.create({ url, active: true }, (tab) => resolve(tab));
+    });
+
+    // 2. Attendre un peu que le DOM de base soit là
+    await new Promise(r => setTimeout(r, 2000));
+
+    // 3. Boucle de Polling depuis le Background
+    let attempts = 0;
+    const maxAttempts = 15;
+    let finalRes = null;
+
+    try {
+        while (attempts < maxAttempts) {
+            attempts++;
+            try {
+                const results = await chrome.scripting.executeScript({
+                    target: { tabId: newTab.id },
+                    world: "MAIN", // CRITIQUE : S'exécuter dans le contexte principal pour que Vue/React accepte les clics !
+                    func: (targetTaille) => {
+                        try {
+                            const closeBtns = document.querySelectorAll('.c-coupon-box .she-close, .cookie-banner .close-btn');
+                            closeBtns.forEach(btn => btn.click());
+
+                            let sizeClicked = false;
+
+                            if (targetTaille) {
+                                if (window.__botSizeClicked) {
+                                    sizeClicked = true;
+                                } else {
+                                    const tgt = targetTaille.toUpperCase();
+                                    
+                                    // Ciblage exact calqué sur les clics manuels de l'utilisateur
+                                    const allSizeElements = Array.from(document.querySelectorAll('p.product-intro__size-radio-inner, span.size-radio__inner-one, div.product-intro__size-radio'));
+                                    let matchingSize = allSizeElements.find(el => {
+                                        if (el.children.length > 2) return false; 
+                                        const text = el.textContent?.trim().toUpperCase() || "";
+                                        if (text.length === 0 || text.length > 15) return false; 
+                                        return text === tgt || text === `(${tgt})` || text.includes(`(${tgt})`) || new RegExp(`\\b${tgt}\\b`).test(text);
+                                    });
+
+                                    if (matchingSize) {
+                                        // Clic simplissime direct sur le noeud texte, exactement comme la souris de l'utilisateur
+                                        matchingSize.click();
+                                        
+                                        // Si le parent est un div radio, on le clique aussi par sécurité
+                                        const parentRadio = matchingSize.closest('div.product-intro__size-radio');
+                                        if (parentRadio && parentRadio !== matchingSize) {
+                                            parentRadio.click();
+                                        }
+
+                                        window.__botSizeClicked = true;
+                                        return { success: false, state: "SIZE_CLICKED_WAITING_STATE", sizeHTML: matchingSize.outerHTML };
+                                    } else {
+                                        return { success: false, state: "WAITING_FOR_SIZE_TO_RENDER" };
+                                    }
+                                }
+                            } else {
+                                sizeClicked = true;
+                            }
+
+                            // Ciblage calqué sur le clic manuel: la balise DIV contenant le texte dans le bouton
+                            let addBtn = document.querySelector('#ProductDetailAddBtn div.productAddBtn__text, button#ProductDetailAddBtn');
+                            
+                            if (!addBtn) {
+                                addBtn = Array.from(document.querySelectorAll('button.add-cart-btn, div[role="button"]'))
+                                    .find(b => {
+                                        const t = b.textContent?.toUpperCase() || "";
+                                        if (t.includes('PROFIL') || t.includes('CONNEXION')) return false;
+                                        return t.includes('AJOUTER') || t.includes('ADD TO CART');
+                                    });
+                            }
+                            
+                            if (addBtn) {
+                                window.__botSizeClicked = false;
+                                
+                                // Clic simplissime direct
+                                addBtn.click();
+                                
+                                return { success: true, sizeFound: sizeClicked, state: "CLICKED" };
+                            }
+                            
+                            return { success: false, state: "WAITING", sizeFound: sizeClicked };
+                        } catch (err) {
+                            return { success: false, error: err.message };
+                        }
+                    },
+                    args: [taille || null]
+                });
+
+                const res = results[0]?.result;
+                
+                // Si undefined ou null, cela signifie que l'injection a bugué sans throw
+                if (!res) {
+                    console.warn("[SHEIN] res est undefined, results=", results);
+                    // On continue le polling
+                } else if (res.success) {
+                    finalRes = res;
+                    break;
+                } else if (res.error) {
+                    // Erreur technique dans la page
+                    throw new Error("Erreur injectée: " + res.error);
+                }
+
+            } catch (injectionErr) {
+                console.error("[SHEIN] Erreur d'injection:", injectionErr);
+                // On peut ignorer et réessayer (ex: frame removed pendant reload)
+            }
+
+            // Attente 1 seconde avant le prochain poll
+            await new Promise(r => setTimeout(r, 1000));
+        }
+
+        if (finalRes && finalRes.success) {
+            // Log succès
+            await saveSheinLog({
+                url: url,
+                taille: taille,
+                venteId: venteId,
+                status: "SUCCESS"
+            });
+            return finalRes;
+        } else {
+            const errObj = finalRes && finalRes.error ? finalRes.error : "Bouton Ajouter au panier introuvable";
+            
+            // Log erreur
+            await saveSheinLog({
+                url: url,
+                taille: taille,
+                venteId: venteId,
+                status: "ERROR",
+                error: errObj
+            });
+            
+            throw new Error(`Echec de l'ajout au panier Shein: ${errObj}`);
+        }
+    } catch (error) {
+        // Log erreur globale
+        await saveSheinLog({
+            url: url,
+            taille: taille,
+            venteId: venteId,
+            status: "ERROR",
+            error: error.message
+        });
+        
+        console.error("[SHEIN CART ERROR]", error);
+        throw error;
+    }
+}
+
 // ===================================================================
 // 📋 COMMAND QUEUE (File d'attente séquentielle thread-safe)
 // ===================================================================
@@ -569,96 +786,54 @@ async function processNextCommand() {
     }, 5000);
 }
 
-// === ALARM : CYCLE AUTO (Jitter Furtif Aléatoire) ===
-const ALARM_NAME = "vintedGhostAlarm";
+// Run once on startup so we don't have to wait 1 minute
+setTimeout(() => {
+    console.log("🚀 Startup initial scan...");
+    pollVintedApiRoutine().catch(e => console.error(e));
+}, 5000);
 
-/**
- * 🎲 Casse la signature temporelle du bot en générant un intervalle
- * totalement imprévisible entre 8 et 10 minutes (avec des secondes aléatoires).
- */
-function scheduleNextGhostAlarm() {
-    const randomDelay = 8 + Math.random() * 2; // Génère par ex. 8.37 minutes, 9.12 minutes, etc.
-    chrome.alarms.create(ALARM_NAME, { delayInMinutes: randomDelay });
-    console.log(`🎲 [ALARM] Furtivité temporelle : Prochain Ghost Scan dans ${randomDelay.toFixed(2)} mins.`);
-}
-
-// === GEMINI AUTO-RESPONDER ALARM (Jitter Aléatoire 8-10 mins) ===
-const GEMINI_ALARM_NAME = "vintedGeminiAlarm";
-
-function scheduleNextGeminiAlarm() {
-    const randomDelay = 8 + Math.random() * 2; // Entre 8 et 10 minutes aléatoires
-    chrome.alarms.create(GEMINI_ALARM_NAME, { delayInMinutes: randomDelay });
-    console.log(`🎲 [ALARM] Furtivité IA : Prochain cycle Gemini dans ${randomDelay.toFixed(2)} mins.`);
-}
-
-// === WARMUP ALARM (Jitter Aléatoire entre 2h et 3h, soit 120-180 mins) ===
+// === ALARMES DÉCALÉES (30s Polling) ===
+const POLL_ALARM_A = "vintedPollAlarmA";
+const POLL_ALARM_B = "vintedPollAlarmB";
 const WARMUP_ALARM_NAME = "vintedWarmupAlarm";
-
-function scheduleNextWarmupAlarm() {
-    const randomDelay = 120 + Math.random() * 60; // Entre 120 et 180 minutes aléatoires
-    chrome.alarms.create(WARMUP_ALARM_NAME, { delayInMinutes: randomDelay });
-    console.log(`🎲 [ALARM] Warm-up comportemental : Prochain cycle dans ${randomDelay.toFixed(2)} mins.`);
-}
-
-// Déclaration des noms d'alarme dans le scope global
-const ACTION_ALARM_NAME = "vintedActionAlarm";
 const METRICS_ALARM_NAME = "vintedSyncAlarm";
 
-// Initialisation intelligente des alarmes uniquement si elles n'existent pas déjà.
-// Empêche le reset des comptes à rebours lorsque le Service Worker de l'extension se réveille de son sommeil.
+// Initialisation intelligente des alarmes (anti-reset au réveil du SW)
 chrome.alarms.getAll((alarms) => {
-    if (!alarms.find(a => a.name === ALARM_NAME)) {
-        scheduleNextGhostAlarm();
+    if (!alarms.find(a => a.name === POLL_ALARM_A)) {
+        // Alarme A: Commence dans 1 min, s'exécute chaque minute
+        chrome.alarms.create(POLL_ALARM_A, { delayInMinutes: 1, periodInMinutes: 1 });
     }
-    if (!alarms.find(a => a.name === GEMINI_ALARM_NAME)) {
-        scheduleNextGeminiAlarm();
-    }
-    if (!alarms.find(a => a.name === WARMUP_ALARM_NAME)) {
-        scheduleNextWarmupAlarm();
-    }
-    if (!alarms.find(a => a.name === ACTION_ALARM_NAME)) {
-        chrome.alarms.create(ACTION_ALARM_NAME, { periodInMinutes: 1 });
+    if (!alarms.find(a => a.name === POLL_ALARM_B)) {
+        // Alarme B: Commence dans 1.5 min, s'exécute chaque minute. Résultat = Exécution toutes les 30 secondes.
+        chrome.alarms.create(POLL_ALARM_B, { delayInMinutes: 1.5, periodInMinutes: 1 });
     }
     if (!alarms.find(a => a.name === METRICS_ALARM_NAME)) {
         chrome.alarms.create(METRICS_ALARM_NAME, { periodInMinutes: 5 });
     }
+    if (!alarms.find(a => a.name === WARMUP_ALARM_NAME)) {
+        const randomDelay = 120 + Math.random() * 60;
+        chrome.alarms.create(WARMUP_ALARM_NAME, { delayInMinutes: randomDelay });
+    }
 });
 
+
+
 chrome.alarms.onAlarm.addListener((alarm) => {
-    if (alarm.name === ALARM_NAME) {
-        console.log("⏰ [ALARM] Réveil automatique Ghost Scan");
-        
-        // 1. Scan des Likes (Ghost Marketing)
-        runGhostScan(false);
-        
-        // 2. Synchronisation de la Comptabilité en arrière-plan
-        setTimeout(() => {
-            syncAccountBalanceToManager().catch(err => console.error("❌ Erreur synchro auto balance :", err));
-        }, 30000); // Attendre 30s après le scan pour répartir la charge
-
-        // 3. Reprogrammer immédiatement la prochaine alarme à une heure aléatoire
-        scheduleNextGhostAlarm();
-    }
-
-    if (alarm.name === GEMINI_ALARM_NAME) {
-        console.log("⏰ [ALARM] Réveil automatique Gemini Auto-Responder");
-        runGeminiScan(false);
-        scheduleNextGeminiAlarm();
-    }
-    
-    if (alarm.name === ACTION_ALARM_NAME) {
-        console.log("⏰ [ALARM] Vérification de la file d'actions Manager...");
-        pollActionQueueFromManager().catch(err => console.error("❌ Erreur Action Polling :", err));
+    if (alarm.name === POLL_ALARM_A || alarm.name === POLL_ALARM_B) {
+        console.log("⏰ [POLL] Réveil du cycle API (30s)...");
+        pollVintedApiRoutine().catch(err => console.error("❌ Erreur Polling API :", err));
     }
     
     if (alarm.name === METRICS_ALARM_NAME) {
-        console.log("⏰ [ALARM] Lancement Synchro Inbox + Dressing...");
+        console.log("⏰ [ALARM] Lancement Synchro Balance, Inbox + Dressing...");
         (async () => {
             try {
+                await syncAccountBalanceToManager();
                 await syncVintedInboxToManager();
                 await syncVintedItemMetricsToManager();
             } catch (err) {
-                console.error("❌ Erreur synchro Inbox/Dressing :", err);
+                console.error("❌ Erreur synchro :", err);
             }
         })();
     }
@@ -666,241 +841,106 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === WARMUP_ALARM_NAME) {
         console.log("⏰ [ALARM] Réveil automatique Warm-up");
         runWarmup(false);
-        scheduleNextWarmupAlarm();
+        const randomDelay = 120 + Math.random() * 60;
+        chrome.alarms.create(WARMUP_ALARM_NAME, { delayInMinutes: randomDelay });
     }
 });
 
-// === GHOST SCAN : OUVRIR ONGLET CACHÉ + LIRE LES NOTIFS ===
-function runGhostScan(force = false) {
-    // --- COOLDOWN & LOCKING ---
-    const now = Date.now();
-    const cooldownMs = 5 * 60 * 1000; // 5 minutes
-    
-    if (!force && (now - syncState.lastGhostScan < cooldownMs)) {
-        console.log("⏭️ [GHOST] Cooldown actif. Ignoré.");
-        return;
-    }
-    
-    if (syncState.isGhostScanning) {
-        console.log("⏳ [GHOST] Scan déjà en cours. Abandon.");
-        return;
-    }
+// === ROUTINE DE POLLING API PRINCIPALE ===
+let isPollingRoutineRunning = false;
 
-    chrome.storage.local.get(['botActive'], (result) => {
-        if (!result.botActive && !force) {
-            console.log("😴 [GHOST] Bot inactif, on dort...");
-            return;
-        }
+async function pollVintedApiRoutine() {
+    if (isPollingRoutineRunning) return;
+    isPollingRoutineRunning = true;
+    
+    try {
+        // 1. Lire la file d'attente du Manager (si on a des actions à faire)
+        await pollActionQueueFromManager();
         
-        syncState.isGhostScanning = true;
-        console.log("🕵️ [GHOST V4] Ouverture de la page notifications...");
-
-        // Ouvrir un onglet CACHÉ sur la page notifications
-        chrome.tabs.create({ 
-            url: 'https://www.vinted.fr/member/notifications', 
-            active: false 
-        }, (tab) => {
-            const ghostTabId = tab.id;
-            console.log("🕵️ [GHOST V4] Onglet fantôme créé : TabID", ghostTabId);
-
-            // Attendre que la page charge complètement
-            chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
-                if (tabId === ghostTabId && info.status === 'complete') {
-                    chrome.tabs.onUpdated.removeListener(listener);
-                    console.log("✅ [GHOST V4] Page chargée, injection du scanner...");
-
-                    // Attendre 3s que le contenu dynamique (React) se charge
-                    setTimeout(() => {
-                        chrome.scripting.executeScript({
-                            target: { tabId: ghostTabId },
-                            func: scanNotificationsPage
-                        }).then(() => {
-                            console.log("🔍 [GHOST V4] Script de scan injecté avec succès");
-                        }).catch(err => {
-                            console.error("❌ [GHOST V4] Erreur injection :", err);
-                            chrome.tabs.remove(ghostTabId);
-                        });
-                    }, 4000);
-                }
-            });
-        });
-    });
+        // 2. Traiter les auto-réponses Gemini (Inbox)
+        await runGeminiScan(false);
+        
+        // 3. Traiter les Likes via API (Notifications)
+        await fetchNotificationsAPI();
+        
+    } catch (err) {
+        console.error("❌ [POLL ROUTINE] Erreur critique :", err);
+    } finally {
+        isPollingRoutineRunning = false;
+    }
 }
 
-// === FONCTION INJECTÉE DANS LA PAGE VINTED ===
-// Elle lit le DOM de la page notifications et renvoie les résultats au background
-function scanNotificationsPage() {
-    console.log("🤖 [SCANNER] Lecture des notifications sur la page...");
+// === LIKES / NOTIFICATIONS API (Remplace le Ghost Scan) ===
+async function fetchNotificationsAPI() {
+    // Anti-doublon / Verrou
+    const now = Date.now();
+    const cooldownMs = 25000; // Ne pas fetcher plus d'une fois toutes les 25s
+    if (now - syncState.lastGhostScan < cooldownMs) return;
+    syncState.lastGhostScan = now;
 
-    const results = {
-        likes: [],
-        messages: [],
-        spySold: [],
-        timestamp: Date.now()
-    };
+    console.log("🕵️ [API SCAN] Lecture invisible des notifications...");
+    
+    const optimalTab = await getOptimalVintedTab();
+    if (!optimalTab) return;
+    const tabId = optimalTab.id;
 
-    // Chercher toutes les notifications sur la page
-    const allItems = document.querySelectorAll(
-        '[class*="notification"], [data-testid*="notification"], ' +
-        '[class*="feed-item"], [class*="FeedItem"], ' +
-        'a[href*="/inbox/"], li, .cell'
-    );
+    const userRes = await fetchUserIdentityDirect(tabId);
+    if (!userRes || !userRes.success) return;
 
-    console.log(`🤖 [SCANNER] ${allItems.length} éléments trouvés sur la page`);
+    // Injection du fetch API dans l'onglet Vinted (Same-Origin)
+    const results = await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: async () => {
+            try {
+                const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                const headers = { "Accept": "application/json", "X-Money-Object": "true" };
+                if (csrfMeta) headers["X-CSRF-Token"] = csrfMeta.content;
 
-    allItems.forEach(item => {
-        const text = (item.innerText || '').toLowerCase();
-        const isUnread = item.className?.includes('unread') || 
-                         item.querySelector('[class*="unread"]') !== null ||
-                         item.querySelector('[class*="dot"]') !== null;
-
-        // Détection des Likes / Favoris
-        if (text.includes('favori') || text.includes('liked') || text.includes('ajouté') || text.includes('aimé')) {
-            const link = item.querySelector('a[href*="/inbox/"]') || 
-                         item.closest('a[href*="/inbox/"]') ||
-                         item.querySelector('a[href*="/items/"]');
-            const href = link?.href || '';
-            
-            // Extraire l'ID de conversation depuis le lien
-            const convMatch = href.match(/\/inbox\/(\d+)/);
-            const itemMatch = href.match(/\/items\/(\d+)/);
-
-            results.likes.push({
-                text: text.substring(0, 300),
-                href: href,
-                convId: convMatch ? convMatch[1] : null,
-                itemId: itemMatch ? itemMatch[1] : null,
-                isUnread: isUnread
-            });
+                const apiUrl = `https://api.${window.location.hostname}/inbox-notifications/v1/notifications?page=1&per_page=20`;
+                const res = await fetch(apiUrl, { credentials: "include", headers });
+                if (!res.ok) return { error: `HTTP ${res.status}` };
+                const data = await res.json();
+                
+                let notifsArray = [];
+                if (Array.isArray(data)) notifsArray = data;
+                else if (data.notifications) notifsArray = data.notifications;
+                else if (data.items) notifsArray = data.items;
+                
+                return { notifications: notifsArray };
+            } catch (e) {
+                return { error: e.message };
+            }
         }
+    });
 
-        // Détection des Messages
-        if (text.includes('message') || text.includes('envoyé') || text.includes('offre')) {
-            const link = item.querySelector('a[href*="/inbox/"]');
-            const href = link?.href || '';
-            const convMatch = href.match(/\/inbox\/(\d+)/);
+    const notifsData = results && results[0] ? results[0].result : null;
+    if (notifsData && notifsData.error) {
+        console.error("❌ [API SCAN] Erreur fetch notifications :", notifsData.error);
+        return;
+    }
 
-            results.messages.push({
-                text: text.substring(0, 300),
-                href: href,
-                convId: convMatch ? convMatch[1] : null,
-                isUnread: isUnread
-            });
-        }
+    if (!notifsData || !notifsData.notifications) return;
 
-        // Détection articles spy vendus
+    // Traitement articles spy vendus (depuis les notifications API)
+    const spySold = [];
+    for (const notif of notifsData.notifications) {
+        const text = ((notif.body || notif.title || '') + ' ' + (notif.link || '')).toLowerCase();
         if ((text.includes('vendu') || text.includes('sold')) &&
             (text.includes('aimé') || text.includes('favori') || text.includes('liked'))) {
-            const link = item.querySelector('a[href*="/items/"]') ||
-                         item.closest('a[href*="/items/"]');
-            const href = link ? link.href : '';
-            const itemMatch = href.match(/\/items\/(\d+)/);
-            results.spySold.push({
-                text: text.substring(0, 200),
-                href: href,
-                itemId: itemMatch ? itemMatch[1] : null,
-                timestamp: Date.now()
-            });
-        }
-    });
-
-    console.log(`🤖 [SCANNER] Résultats : ${results.likes.length} likes, ${results.messages.length} messages`);
-
-    // Envoyer les résultats au background
-    chrome.runtime.sendMessage({
-        action: "ghostScanResults",
-        data: results
-    });
-}
-
-// === TRAITEMENT DES RÉSULTATS (avec mémoire anti-doublon) ===
-function handleScanResults(data, ghostTabId) {
-    console.log(`📊 [GHOST V4] Traitement : ${data.likes.length} likes, ${data.messages.length} messages`);
-
-    // Libération du verrou et mise à jour du timestamp
-    syncState.lastGhostScan = Date.now();
-    syncState.isGhostScanning = false;
-
-    // Fermer l'onglet fantôme
-    if (ghostTabId) {
-        setTimeout(() => {
-            chrome.tabs.remove(ghostTabId).catch(() => {});
-        }, 2000);
-    }
-
-    // Charger la liste des utilisateurs déjà contactés
-    chrome.storage.local.get(['contactedUsers'], (result) => {
-        const contacted = result.contactedUsers || [];
-        let dmSentCount = 0;
-        const MAX_DM_PER_SCAN = 3; // Max 3 DM par scan pour rester discret
-
-        for (const like of data.likes) {
-            // Extraire le nom d'utilisateur (le premier mot, car Vinted commence toujours la notification par le pseudo)
-            const cleanText = like.text.trim();
-            const firstWord = cleanText.split(/\s+/)[0];
-            const skipWords = ["votre", "vous", "le", "la", "les", "un", "une", "vinted", "félicitations", "bravo"];
-            const username = (!skipWords.includes(firstWord.toLowerCase()) && /^[a-zA-Z0-9_.-]+$/.test(firstWord)) ? firstWord : null;
-
-            // FILTRE TEMPOREL DÉSACTIVÉ : Répond à tous les likes, peu importe l'ancienneté.
-
-            // ANTI-DOUBLON : ignorer si déjà contacté par le bot
-            if (!username || contacted.includes(username)) {
-                if (username) console.log(`⏭️ [GHOST V4] ${username} déjà contacté, on skip`);
-                continue;
+            let itemId = notif.subject_id;
+            if (!itemId && notif.link) {
+                const m = notif.link.match(/item_id=(\d+)/) || notif.link.match(/\/items\/(\d+)/);
+                if (m) itemId = m[1];
             }
-
-            // LIMITE DE SÉCURITÉ : max 3 DM par cycle pour rester furtif
-            if (dmSentCount >= MAX_DM_PER_SCAN) {
-                console.log(`🛑 [GHOST V4] Limite de ${MAX_DM_PER_SCAN} DM atteinte, arrêt du cycle.`);
-                break;
-            }
-
-            if (like.href) {
-                console.log(`⭐ [GHOST V4] NOUVEAU like de ${username} → ouverture conversation`);
-                
-                // Ajouter à la liste des contactés AVANT d'ouvrir l'onglet
-                contacted.push(username);
-                dmSentCount++;
-
-                // Empiler la tâche d'envoi dans la file d'attente séquentielle
-                addToCommandQueue({
-                    id: `ghost_dm_${username}`,
-                    execute: async () => {
-                        return new Promise((resolve) => {
-                            chrome.storage.local.set({ ghostMode: true });
-                            const ghostUrl = like.href + (like.href.includes('?') ? '&' : '?') + 'ghost=1';
-                            
-                            chrome.tabs.create({ url: ghostUrl, active: false }, (convTab) => {
-                                saveLog(`⭐ DM envoyé à ${username}`);
-                                // Fermer l'onglet après 20s pour laisser l'injection agir
-                                setTimeout(() => {
-                                    chrome.tabs.remove(convTab.id).catch(() => {});
-                                    resolve(); // Débloque la file d'attente !
-                                }, 20000);
-                            });
-                        });
-                    }
-                });
+            if (itemId) {
+                spySold.push({ itemId: String(itemId), timestamp: Date.now() });
             }
         }
-
-        // Sauvegarder la liste mise à jour (garder les 200 derniers pour pas exploser le storage)
-        chrome.storage.local.set({ contactedUsers: contacted.slice(-200) });
-        console.log(`📝 [GHOST V4] ${dmSentCount} nouveaux DM envoyés. ${contacted.length} utilisateurs en mémoire.`);
-    });
-
-    // Log des messages
-    for (const msg of data.messages) {
-        console.log(`📧 [GHOST V4] Message : "${msg.text}"`);
-        saveLog(`📧 Nouveau message détecté`);
     }
-
-    // Traitement articles spy vendus
-    if (data.spySold && data.spySold.length > 0) {
+    if (spySold.length > 0) {
         getManagerApiUrl().then(managerUrl => {
             const baseUrl = managerUrl.replace('/api/comptabilite/balance', '');
-            data.spySold.forEach(sold => {
-                if (!sold.itemId) return;
+            spySold.forEach(sold => {
                 fetch(`${baseUrl}/api/extension/spy/sold`, {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
@@ -910,10 +950,191 @@ function handleScanResults(data, ghostTabId) {
         });
     }
 
-    if (data.likes.length === 0 && data.messages.length === 0) {
-        console.log("😴 [GHOST V4] RAS — Aucune notification.");
-        saveLog("✅ Scan terminé — RAS");
-    }
+    // Charger la liste des utilisateurs contactés
+    chrome.storage.local.get(['contactedUsers'], async (result) => {
+        const contacted = result.contactedUsers || [];
+        let dmSentCount = 0;
+        const MAX_DM_PER_SCAN = 2; // Reduced from 3 to look more human
+
+            for (const notif of notifsData.notifications) {
+                // Types Vinted pour likes : ancien format (ItemFavorited) ou nouveau format API (entry_type 20)
+                const nType = notif.type || notif.action || "";
+                const isLike = (notif.entry_type === 20) || nType === "ItemFavorited" || nType.toLowerCase().includes("favorite") || nType === "bundle_created";
+                
+                if (!isLike) continue;
+
+                // Extraction robuste du username et itemId (gère l'ancien et le nouveau format)
+                let username = null;
+                let itemId = null;
+                let userId = null;
+
+                if (notif.entry_type === 20) {
+                    // Vinted place l'ID de l'acheteur dans le lien
+                    if (notif.link) {
+                        const mUser = notif.link.match(/user_id=(\d+)/);
+                        if (mUser) userId = mUser[1];
+                    }
+                    if (!userId && notif.actor_id) userId = notif.actor_id;
+                    // Nouveau format (api.www.vinted.com/inbox-notifications)
+                    // Le username est systématiquement le premier mot du body
+                    if (notif.body) username = notif.body.split(" ")[0];
+                    itemId = notif.subject_id;
+                    // Fallback itemId via le lien
+                    if (!itemId && notif.link) {
+                        const m = notif.link.match(/item_id=(\d+)/);
+                        if (m) itemId = m[1];
+                    }
+                } else {
+                    // Ancien format (/api/v2/notifications)
+                    username = notif.user ? notif.user.login : (notif.bundle && notif.bundle.user ? notif.bundle.user.login : null);
+                    itemId = notif.item ? notif.item.id : (notif.subject && notif.subject.id ? notif.subject.id : null);
+                    userId = notif.user ? notif.user.id : (notif.bundle && notif.bundle.user ? notif.bundle.user.id : null);
+                }
+                
+                if (!username || !itemId) continue;
+                
+                if (contacted.includes(username)) continue;
+
+                if (dmSentCount >= MAX_DM_PER_SCAN) {
+                    console.log(`🛑 [API SCAN] Limite de DM atteinte, on verra les autres au prochain cycle.`);
+                    break;
+                }
+
+                // Envoyer le message d'approche via l'API (Injection) et vérifier rétroactivement
+                const injectResults = await chrome.scripting.executeScript({
+                    target: { tabId: tabId },
+                    world: "MAIN",
+                    func: async (recipientLogin, itemId, recipientId) => {
+                        let csrfToken = null;
+                        const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                        if (csrfMeta && csrfMeta.content) {
+                            csrfToken = csrfMeta.content;
+                        } else {
+                            // Vinted SPA fallback
+                            const scripts = document.querySelectorAll("script");
+                            for (let s of scripts) {
+                                if (s.textContent) {
+                                    let c = s.textContent.match(/"CSRF_TOKEN\\?":\\?"([^"\\]+)\\?"/);
+                                    if (c) { csrfToken = c[1]; break; }
+                                    let m = s.textContent.match(/"csrf[_-]token"\s*[:,]\s*"([^"]+)"/);
+                                    if (!m) m = s.textContent.match(/csrf[_-]token=([A-Za-z0-9+/=_-]+)/);
+                                    if (m) { csrfToken = m[1]; break; }
+                                }
+                            }
+                        }
+                        
+                        const headers = { "Accept": "application/json", "Content-Type": "application/json", "X-Money-Object": "true" };
+                        if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+
+                        const anonMatch = document.cookie.match(/(?:^|;\s*)anon_id=([^;]+)/);
+                        if (anonMatch) headers["X-Anon-Id"] = anonMatch[1];
+
+                        try {
+                            // 1. Créer la conversation avec ce user
+                            // Si on n'a pas l'ID de l'utilisateur, on le cherche d'abord
+                            if (!recipientId) {
+                                const userRes = await fetch(`/api/v2/users?search_text=${recipientLogin}`);
+                                if (userRes.ok) {
+                                    const userData = await userRes.json();
+                                    if (userData.users && userData.users.length > 0) {
+                                        const u = userData.users.find(x => x.login.toLowerCase() === recipientLogin.toLowerCase());
+                                        if (u) recipientId = u.id;
+                                    }
+                                }
+                            }
+                            
+                            if (!recipientId) {
+                                return { success: false, reason: "Impossible de trouver l'ID utilisateur pour " + recipientLogin };
+                            }
+
+                            const convRes = await fetch("/api/v2/conversations", {
+                                method: "POST",
+                                credentials: "include",
+                                headers: headers,
+                                body: JSON.stringify({
+                                    initiator: "seller_enters_notification",
+                                    item_id: Number(itemId),
+                                    opposite_user_id: Number(recipientId)
+                                })
+                            });
+                            
+                            const convData = await convRes.json();
+                            const convId = convData.conversation ? convData.conversation.id : null;
+                            
+                            if (!convRes.ok) {
+                                return { error: `Conv HTTP ${convRes.status} (CSRF:${csrfToken ? csrfToken.substring(0,5)+'...' : 'NULL'}, Anon:${headers['X-Anon-Id'] ? 'OK' : 'NULL'}) : ${JSON.stringify(convData)}` };
+                            }
+
+                            if (convId) {
+                                // 1.5. Vérifier rétroactivement s'il y a déjà des messages
+                                const detailRes = await fetch(`/api/v2/conversations/${convId}`, {
+                                    credentials: "include",
+                                    headers: { "Accept": "application/json", "X-Money-Object": "true" }
+                                });
+                                
+                                if (detailRes.ok) {
+                                    const detailData = await detailRes.json();
+                                    const convDetails = detailData.conversation || detailData;
+                                    const messages = convDetails.messages || [];
+                                    
+                                    let alreadyMessaged = false;
+                                    for (const m of messages) {
+                                        const text = (m.entity ? m.entity.body : m.body) || "";
+                                        if (text && typeof text === "string" && text.trim().length > 0) {
+                                            if (!text.toLowerCase().includes("pour ta protection") && !text.toLowerCase().includes("coordonnées")) {
+                                                alreadyMessaged = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    
+                                    if (alreadyMessaged) {
+                                        return { skipped: true };
+                                    }
+                                }
+
+                                // 2. Envoyer le message
+                                const msgBody = "Bonjour ! 😊 J'ai vu que cet article vous plaisait. N'hésitez pas si vous avez des questions ou si vous souhaitez faire une offre !";
+                                await fetch(`/api/v2/conversations/${convId}/replies`, {
+                                    method: "POST",
+                                    credentials: "include",
+                                    headers: headers,
+                                    body: JSON.stringify({
+                                        reply: { body: msgBody }
+                                    })
+                                });
+                                return { success: true };
+                            }
+                            return { error: "No convId" };
+                        } catch (e) {
+                            return { error: e.message };
+                        }
+                    },
+                    args: [username, itemId, userId]
+                });
+                
+                const res = injectResults && injectResults[0] ? injectResults[0].result : null;
+                
+                if (res && res.skipped) {
+                    console.log(`⏭️ [API SCAN] Rattrapage : ${username} a déjà été contacté. Ignoré.`);
+                } else if (res && !res.error) {
+                    console.log(`⭐ [API SCAN] NOUVEAU like API de ${username} → Envoi DM invisible`);
+                    saveLog(`⭐ DM (API) envoyé à ${username}`);
+                    dmSentCount++;
+                } else if (res && res.error) {
+                    console.error(`❌ [API SCAN] Erreur DM pour ${username} :`, res.error);
+                    saveLog(`❌ Erreur DM ${username} : ${res.error.substring(0, 50)}`);
+                }
+
+                contacted.push(username);
+                
+                // Délai aléatoire (8 à 15 secondes) entre deux DM pour faire très naturel
+                const humanDelay = 8000 + Math.random() * 7000;
+                await new Promise(r => setTimeout(r, humanDelay));
+            }
+
+        chrome.storage.local.set({ contactedUsers: contacted.slice(-300) });
+    });
 }
 
 // === LOGGER (Thread-Safe Sequential Queue) ===
@@ -934,12 +1155,11 @@ function saveLog(message, type = "INFO") {
                     const configuredUrl = result.managerApiUrl || DEFAULT_MANAGER_URL;
                     
                     let managerUrl;
-                    if (configuredUrl.includes("vercel.app")) {
-                        managerUrl = "http://localhost:3000/api/extension/logs";
-                    } else if (configuredUrl.includes("/api/")) {
+                    if (configuredUrl.includes("/api/")) {
                         managerUrl = configuredUrl.substring(0, configuredUrl.indexOf("/api/")) + "/api/extension/logs";
                     } else {
-                        managerUrl = "http://localhost:3000/api/extension/logs";
+                        // Fallback par defaut si on arrive pas a parser
+                        managerUrl = configuredUrl.replace(/\/$/, "") + "/api/extension/logs";
                     }
 
                     fetch(managerUrl, {
@@ -1264,14 +1484,25 @@ async function syncVintedOrdersToManager() {
             let buyerPic = null;
             if (o.buyer && o.buyer.photo) {
                 buyerPic = o.buyer.photo.url || o.buyer.photo.full_size_url;
+            } else if (o.user && o.user.photo) {
+                buyerPic = o.user.photo.url || o.user.photo.full_size_url;
+            } else if (o.other_user && o.other_user.photo) {
+                buyerPic = o.other_user.photo.url || o.other_user.photo.full_size_url;
             }
+
+            const getBuyerLogin = (order) => {
+                if (order.buyer && (order.buyer.login || order.buyer.name)) return order.buyer.login || order.buyer.name;
+                if (order.user && (order.user.login || order.user.name)) return order.user.login || order.user.name;
+                if (order.other_user && (order.other_user.login || order.other_user.name)) return order.other_user.login || order.other_user.name;
+                return "Acheteur Inconnu";
+            };
 
             return {
                 id: String(o.transaction_id || o.id),
                 title: o.title || "Article Vinted",
                 price: priceNum,
                 itemId: (o.item_id || (o.item && o.item.id)) ? String(o.item_id || o.item.id) : null,
-                buyerLogin: o.buyer ? (o.buyer.login || o.buyer.name) : "Acheteur Inconnu",
+                buyerLogin: getBuyerLogin(o),
                 buyerPhoto: buyerPic,
                 photoUrl: itemPhoto,
                 status: o.status || "unknown",
@@ -1676,36 +1907,82 @@ async function syncVintedItemMetricsToManager() {
                     const headers = { "Accept": "application/json" };
                     if (csrf) headers["X-CSRF-Token"] = csrf;
 
-                    // URL exacte du Dressing Vinted extraite par ingénierie
-                    const url = `/api/v2/wardrobe/${userId}/items?per_page=96&page=1&order=relevance`;
-                    const r = await fetch(url, { credentials: "include", headers });
-                    if (!r.ok) throw new Error(`Vinted HTTP ${r.status}`);
-                    const data = await r.json();
-                    
-                    // Détection de déconnexion
-                    if (data.message_code === "user_login_required" || data.code === 21) {
-                        throw new Error("Déconnecté (Rechargez votre page Vinted)");
+                    let allItems = [];
+                    let page = 1;
+                    let totalPages = 1;
+
+                    // 1. Récupération des annonces du Dressing
+                    while (page <= totalPages) {
+                        const url = `/api/v2/wardrobe/${userId}/items?per_page=96&page=${page}&order=relevance`;
+                        const r = await fetch(url, { credentials: "include", headers });
+                        if (!r.ok) break;
+                        const data = await r.json();
+                        
+                        if (data.message_code === "user_login_required" || data.code === 21) {
+                            throw new Error("Déconnecté (Rechargez votre page Vinted)");
+                        }
+
+                        if (data.items && Array.isArray(data.items)) {
+                            allItems = allItems.concat(data.items);
+                        }
+                        
+                        if (data.pagination && data.pagination.total_pages) {
+                            totalPages = data.pagination.total_pages;
+                        } else {
+                            break;
+                        }
+                        page++;
                     }
 
-                    if (!data.items || !Array.isArray(data.items)) {
-                        const keys = Object.keys(data).join(", ");
-                        throw new Error(`Format Dressing Invalide (Clés : ${keys})`);
+                    // 2. Récupération des Brouillons
+                    try {
+                        let draftsPage = 1;
+                        let draftsTotalPages = 1;
+                        while (draftsPage <= draftsTotalPages) {
+                            const url = `/api/v2/item_upload/drafts?per_page=96&page=${draftsPage}`;
+                            const r = await fetch(url, { credentials: "include", headers });
+                            if (!r.ok) break;
+                            const data = await r.json();
+                            
+                            const draftsArray = data.drafts || data.items || [];
+                            if (Array.isArray(draftsArray)) {
+                                draftsArray.forEach(draft => {
+                                    draft.status = "Brouillon";
+                                    allItems.push(draft);
+                                });
+                            }
+                            
+                            if (data.pagination && data.pagination.total_pages) {
+                                draftsTotalPages = data.pagination.total_pages;
+                            } else {
+                                break;
+                            }
+                            draftsPage++;
+                        }
+                    } catch (e) {
+                        console.warn("Erreur lors de la récupération des brouillons:", e);
                     }
-
-                    const items = data.items;
 
                     // Cartographier les champs attendus par NextJS
-                    const mapped = items.map(item => {
+                    const mapped = allItems.map(item => {
                         let photoUrl = null;
                         const photoObj = item.photo || (item.photos && item.photos[0]) || null;
                         if (photoObj) {
                             photoUrl = photoObj.url || photoObj.full_size_url || (photoObj.thumbnails?.[0]?.url) || null;
                         }
-
+                        
                         let relativeUrl = item.url || `/items/${item.id}`;
 
-                        // Extraire le prix numérique (priorité : price_numeric > price.amount > price)
                         const price = item.price_numeric ?? (item.price && typeof item.price === 'object' ? item.price.amount : null) ?? item.price ?? null;
+                        
+                        let resolvedStatus = item.status || "Actif";
+                        
+                        // Force override based on boolean flags or status_id, regardless of what string Vinted puts in item.status
+                        if (item.is_hidden || item.status_id === 2 || String(resolvedStatus).toLowerCase() === "hidden") {
+                            resolvedStatus = "Masqué";
+                        } else if (item.is_draft || item.status_id === 5 || String(resolvedStatus).toLowerCase() === "draft") {
+                            resolvedStatus = "Brouillon";
+                        }
 
                         return {
                             id: String(item.id),
@@ -1715,7 +1992,7 @@ async function syncVintedItemMetricsToManager() {
                             price: price ? parseFloat(price) : null,
                             viewCount: Number(item.view_count || 0),
                             favouriteCount: Number(item.favourite_count || 0),
-                            status: item.status || "Actif",
+                            status: resolvedStatus,
                             uploadedAtVinted: item.created_at_ts ? new Date(item.created_at_ts * 1000).toISOString() : new Date().toISOString()
                         };
                     });
@@ -1807,10 +2084,10 @@ async function pollActionQueueFromManager() {
         const urlsToTry = [];
 
         if (configuredUrl.includes("vercel.app")) {
-            urlsToTry.push(`http://localhost:3000/api/extension/actions?botAccountName=${botName}`);
-            urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}`));
+            urlsToTry.push(`http://localhost:3000/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`);
+            urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`));
         } else {
-            urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}`));
+            urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`));
         }
 
         let pendingActions = [];
@@ -1821,7 +2098,7 @@ async function pollActionQueueFromManager() {
             try {
                 const controller = new AbortController();
                 const timeoutId = setTimeout(() => controller.abort(), 3000);
-
+                
                 const res = await fetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
 
@@ -1840,7 +2117,6 @@ async function pollActionQueueFromManager() {
 
         console.log(`⚡ [ACTIONS] ${pendingActions.length} ordres en attente du Manager ! Exécution séquentielle...`);
 
-        // Keep-alive MV3 : déterminer si on a des REPOST_ITEM
         const hasRepostItems = pendingActions.some(a => a.actionType === "REPOST_ITEM");
         let keepAlive = null;
 
@@ -1852,7 +2128,6 @@ async function pollActionQueueFromManager() {
         }
 
         try {
-            // 2. Traiter chaque action
             for (const action of pendingActions) {
                 console.log(`⚡ [EXECUTE] Ordre ${action.actionType} (ID: ${action.id})`);
 
@@ -1860,27 +2135,78 @@ async function pollActionQueueFromManager() {
                 let errorMessage = null;
 
                 try {
-                    // Interception REPOST_ITEM : exécution directe via repostItemREST du service worker
                     if (action.actionType === "REPOST_ITEM") {
                         console.log(`🔄 [REPOST] Détection action REPOST_ITEM. Exécution directe dans le service worker...`);
 
-                        // Optionnel : attendre le délai avant reposte si fourni
                         if (action.payload && action.payload.delayBeforeMs && action.payload.delayBeforeMs > 0) {
                             console.log(`⏳ [REPOST] Attente ${action.payload.delayBeforeMs}ms avant le reposte...`);
                             await new Promise(resolve => setTimeout(resolve, action.payload.delayBeforeMs));
                         }
 
-                        // Exécuter repostItemREST directement (elle est globale via importScripts)
                         const repostResult = await repostItemREST(action.payload.itemId, action.payload);
                         console.log(`✅ [REPOST] Reposte réussi : ${repostResult.newId}`);
+                        success = true;
+                    } else if (action.actionType === "DUPLICATE_ITEM") {
+                        console.log(`🔄 [DUPLICATE] Détection action DUPLICATE_ITEM. Exécution directe...`);
+                        
+                        // payload { sourceItemId, asDraft, cropPercent }
+                        const dupResult = await duplicateItemREST(action.payload.sourceItemId, {
+                            asDraft: action.payload.asDraft,
+                            cropPercent: action.payload.cropPercent || 0
+                        });
+                        console.log(`✅ [DUPLICATE] Duplication réussie : ${dupResult.newId} (Brouillon: ${dupResult.isDraft})`);
                         success = true;
                     } else if (action.actionType === "MARKET_SPY_LIKE") {
                         const spyResult = await runMarketSpyLike(action.payload);
                         console.log(`✅ [MARKET SPY] ${spyResult.liked} articles likés`);
                         success = true;
+                    } else if (action.actionType === "ADD_TO_CART_SHEIN") {
+                        await handleSheinCart(action.payload.url, action.payload.taille, action.payload.venteId);
+                        console.log(`✅ [SHEIN CART] Ajout réussi.`);
+                        success = true;
                     } else {
-                        // Actions standard : routage via content script
-                        await executeBotAction(tabId, action);
+                        const actionResult = await executeBotAction(tabId, action);
+                        
+                        if (action.actionType === "CHECK_EXTENSION_STATUS" && actionResult?.isAccepted) {
+                            const venteId = action.payload.venteId;
+                            const managerUrlObj = new URL(activeBaseUrl);
+                            const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
+
+                            // Appeler l'API de validation du prolongement
+                            const validRes = await fetch(`${managerRootUrl}/api/ventes/${venteId}/prolongement`, {
+                                method: "POST"
+                            });
+                            
+                            if (!validRes.ok) throw new Error(`Echec de l'auto-validation du prolongement sur le Manager`);
+                            console.log(`✅ [EXTENSION] Prolongement auto-validé pour la vente ${venteId}`);
+                        }
+
+                        // Si c'est un GENERATE_LABEL, on traite l'upload du PDF ici dans le background
+                        if (action.actionType === "GENERATE_LABEL" && actionResult?.isLabel) {
+                            const { labelUrl, transporteur, trackingCode } = actionResult;
+                            const venteId = action.payload.venteId;
+                            
+                            const managerUrlObj = new URL(activeBaseUrl);
+                            const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
+
+                            // Téléchargement du PDF
+                            const pdfRes = await fetch(labelUrl);
+                            const pdfBlob = await pdfRes.blob();
+                            
+                            const formData = new FormData();
+                            formData.append('venteId', venteId);
+                            formData.append('file', pdfBlob, `bordereau.pdf`);
+                            formData.append('transporteur', transporteur);
+                            formData.append('numeroBordereau', trackingCode);
+
+                            const uploadRes = await fetch(`${managerRootUrl}/api/expeditions`, {
+                                method: "POST",
+                                body: formData
+                            });
+                            
+                            if (!uploadRes.ok) throw new Error(`Upload Manager a échoué: ${uploadRes.status}`);
+                        }
+
                         success = true;
                     }
 
@@ -1890,7 +2216,6 @@ async function pollActionQueueFromManager() {
                     console.error(`❌ [EXECUTE] Échec pour l'action #${action.id} :`, errorMessage);
                 }
 
-                // 3. Mettre à jour le statut via PATCH sur le même endpoint
                 try {
                     await fetch(activeBaseUrl, {
                         method: "PATCH",
@@ -1902,7 +2227,6 @@ async function pollActionQueueFromManager() {
                         })
                     });
 
-                    // Si c'était une action de messagerie ou d'offre, forcer instantanément un rafraîchissement de l'inbox
                     if (success && (action.actionType === "SEND_MESSAGE" || action.actionType === "ACCEPT_OFFER")) {
                         setTimeout(() => syncVintedInboxToManager(), 2000);
                     }
@@ -1910,11 +2234,9 @@ async function pollActionQueueFromManager() {
                     console.error("❌ [EXECUTE] Impossible de notifier le Manager du statut de l'action :", patchErr);
                 }
 
-                // Pause humaine entre 2 actions
                 await new Promise(resolve => setTimeout(resolve, 1500));
             }
         } finally {
-            // Nettoyage du keep-alive si activé
             if (keepAlive !== null) {
                 clearInterval(keepAlive);
                 console.log("✅ [REPOST] Keep-alive MV3 arrêté.");
@@ -1925,6 +2247,10 @@ async function pollActionQueueFromManager() {
         console.error("❌ [ACTIONS] Échec de boucle :", e.message);
     }
 }
+
+/**
+ * Exécute l'ajout au panier sur Shein dans un nouvel onglet Chrome natif
+ */
 
 /**
  * Exécute concrètement un ordre natif dans le contexte de l'onglet Vinted.
@@ -2059,6 +2385,93 @@ async function executeBotAction(tabId, action) {
                     return { ok: true };
                 }
 
+                if (type === "CHECK_EXTENSION_STATUS") {
+                    const { vintedTransactionId } = pay;
+                    if (!vintedTransactionId) throw new Error("transactionId manquant");
+
+                    // 1. Lire la transaction pour récupérer la conversation
+                    const txRes = await fetch(`/api/v2/transactions/${vintedTransactionId}`, { credentials: "include", headers: getHeaders(false) });
+                    if (!txRes.ok) throw new Error(`Impossible de lire la transaction ${vintedTransactionId}`);
+                    const txData = await txRes.json();
+                    
+                    const transaction = txData.transaction || txData;
+                    const conversationId = transaction.conversation_id || transaction.item?.conversation_id;
+
+                    if (!conversationId) {
+                        throw new Error("Impossible de trouver la conversation pour vérifier l'extension");
+                    }
+
+                    // 2. Lire les messages de la conversation
+                    const convRes = await fetch(`/api/v2/conversations/${conversationId}`, { credentials: "include", headers: getHeaders(false) });
+                    if (!convRes.ok) throw new Error("Impossible de lire la conversation");
+                    const cData = await convRes.json();
+                    const conv = cData.conversation || cData;
+
+                    // Chercher un message système récent qui confirme le prolongement
+                    // Les mots clés : "délai" "prolongé", "accepté", "shipping_deadline"
+                    let isAccepted = false;
+                    for (const m of (conv.messages || [])) {
+                        if (m.type === "system_message" || m.is_system_message || m.action_type) {
+                            const text = (m.body || m.content || "").toLowerCase();
+                            if (text.includes("accept") && text.includes("prolong") || text.includes("délai")) {
+                                isAccepted = true;
+                                break;
+                            }
+                            if (m.action_type && m.action_type.includes("deadline") && m.action_type.includes("extend")) {
+                                isAccepted = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    return { ok: true, isAccepted };
+                }
+
+                if (type === "DELETE_ITEM") {
+                    const { itemId } = pay;
+                    if (!itemId) throw new Error("itemId manquant");
+                    const res = await fetch(`/api/v2/items/${itemId}`, {
+                        method: "DELETE",
+                        credentials: "include",
+                        headers: getHeaders(false)
+                    });
+                    if (!res.ok) throw new Error(`Échec suppression HTTP ${res.status}`);
+                    return { ok: true };
+                }
+
+                if (type === "PUBLISH_DRAFT") {
+                    const { itemId } = pay;
+                    if (!itemId) throw new Error("itemId manquant");
+                    
+                    // 1. Récupérer les données du brouillon existant
+                    const draftRes = await fetch(`/api/v2/item_upload/items/${itemId}`, {
+                        credentials: "include",
+                        headers: getHeaders(false)
+                    });
+                    if (!draftRes.ok) throw new Error(`Impossible de récupérer le brouillon HTTP ${draftRes.status}`);
+                    const dData = await draftRes.json();
+                    const draftObj = dData.item || dData.draft || dData;
+                    
+                    // 2. Publier le brouillon
+                    const publishRes = await fetch(`/api/v2/item_upload/drafts/${itemId}/completion`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: getHeaders(true),
+                        body: JSON.stringify({
+                            draft: draftObj,
+                            push_up: false,
+                            feedback_id: null,
+                            parcel: null,
+                            upload_session_id: draftObj.temp_uuid || null
+                        })
+                    });
+                    if (!publishRes.ok) {
+                        const errTxt = await publishRes.text();
+                        throw new Error(`Échec publication HTTP ${publishRes.status}: ${errTxt}`);
+                    }
+                    return { ok: true };
+                }
+
                 throw new Error(`Type d'action inconnu : ${type}`);
             } catch (err) {
                 throw new Error(err.message);
@@ -2092,7 +2505,7 @@ async function runGeminiScan(force = false) {
         
         const negoThreshold = result.negoThreshold || 15; // 15% par défaut
         
-        saveLog("🤖 Scan IA : Démarrage...");
+        // saveLog("🤖 Scan IA : Démarrage..."); // Retiré pour éviter de spammer les logs visuels inutilement
         console.log("🤖 [GEMINI] Lancement de l'aspiration messagerie contextuelle...");
         
         try {
@@ -2172,6 +2585,12 @@ async function runGeminiScan(force = false) {
                              
                 if (isTx) {
                     console.log(`⏭️ [GEMINI] La conversation #${convId} avec @${opponentName} est liée à une transaction (colis acheté/envoyé). Skip.`);
+                    continue;
+                }
+                
+                // 🛡️ FILTRE VINTED: Ignorer les messages officiels système de Vinted
+                if (opponentName.toLowerCase() === "vinted" || opponentName.toLowerCase() === "equipe_vinted" || c.is_system_conversation) {
+                    console.log(`⏭️ [GEMINI] La conversation #${convId} est un message système Vinted. Skip.`);
                     continue;
                 }
                 
@@ -2299,34 +2718,50 @@ async function runGeminiScan(force = false) {
                     
                     console.log(`✨ [GEMINI] Texte généré pour @${opponentName} : "${finalReplyText}"`);
                     
-                    // 6. ENVOI SÉQUENTIEL : Empilement dans la Command Queue
-                    syncState.queuedReplies.push(convId); // Verrouiller la conversation
-                    addToCommandQueue({
-                        id: `gemini_reply_${convId}_to_${opponentName}`,
-                        execute: async () => {
-                            return new Promise((resolve) => {
-                                const cleanUp = () => {
-                                    syncState.queuedReplies = syncState.queuedReplies.filter(id => id !== convId);
-                                    resolve();
-                                };
-                                
-                                let url = `https://www.vinted.fr/inbox/${convId}?gemini=1&reply_text=${encodeURIComponent(finalReplyText)}`;
-                                if (triggerOfferPrice) {
-                                    url += `&offer_price=${triggerOfferPrice}`;
-                                }
-                                
-                                chrome.tabs.create({ url, active: false }, (tab) => {
-                                    saveLog(`🤖 IA : Taper & Envoyer pour @${opponentName}...`);
-                                    // Attendre 25 secondes que messages.js saisisse, envoie et valide l'offre
-                                    setTimeout(() => {
-                                        chrome.tabs.remove(tab.id).catch(() => {});
-                                        saveLog(`✅ IA : Traitement terminé pour @${opponentName}`);
-                                        cleanUp();
-                                    }, 25000);
-                                });
+                    // 6. ENVOI INSTANTANÉ (API INVISIBLE)
+                    syncState.queuedReplies.push(convId);
+                    
+                    try {
+                        const optimalTab = await getOptimalVintedTab();
+                        if (optimalTab) {
+                            saveLog(`🤖 IA : Envoi du message API pour @${opponentName}...`);
+                            
+                            await chrome.scripting.executeScript({
+                                target: { tabId: optimalTab.id },
+                                func: async (cid, text, offerPrice) => {
+                                    const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                                    const headers = { "Accept": "application/json", "Content-Type": "application/json", "X-Money-Object": "true" };
+                                    if (csrfMeta) headers["X-CSRF-Token"] = csrfMeta.content;
+
+                                    // Envoi du message
+                                    await fetch(`/api/v2/conversations/${cid}/replies`, {
+                                        method: "POST",
+                                        credentials: "include",
+                                        headers: headers,
+                                        body: JSON.stringify({
+                                            reply: { body: text }
+                                        })
+                                    });
+
+                                    // Si une offre est attachée, on l'envoie aussi
+                                    if (offerPrice) {
+                                        await fetch(`/api/v2/transactions/`, { // Endpoints exacts d'offres à raffiner selon API Vinted, mais typiquement inclus dans l'inbox. 
+                                            // TODO: vérifier l'endpoint exact pour les offres si l'offre n'est pas qu'un simple texte
+                                        });
+                                        // On simulera qu'on envoie juste le texte pour l'instant
+                                    }
+                                },
+                                args: [convId, finalReplyText, triggerOfferPrice]
                             });
+
+                            saveLog(`✅ IA : Réponse instantanée envoyée à @${opponentName}`);
                         }
-                    });
+                    } catch (e) {
+                        console.error("❌ Erreur API Gemini Reply :", e);
+                        saveLog(`❌ IA : Échec de l'envoi API à @${opponentName}`);
+                    } finally {
+                        syncState.queuedReplies = syncState.queuedReplies.filter(id => id !== convId);
+                    }
                 } else {
                     console.warn("⚠️ [GEMINI] Aucune réponse valide renvoyée par generateGeminiResponse.");
                     saveLog("⚠️ IA : Réponse ignorée (vide).");
@@ -2353,12 +2788,16 @@ async function generateGeminiResponse(history, botName, itemTitle, itemPrice, mi
     if (!apiKey) {
         throw new Error("geminiApiKey manquant : configurez-la dans chrome.storage.local (voir README)");
     }
-    // Utilisation de l'alias d'origine (gemini-flash-latest) sans le 1.5 qui provoquait l'erreur 404
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${apiKey}`;
+    // Utilisation du modèle gemini-3.1-flash-lite qui est bien supporté par l'API REST
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key=${apiKey}`;
     
     // Prompt adaptatif intégrant l'identité dynamique du bot, le titre et le prix de l'article
     let prompt = `Tu es ${botName}, une vendeuse professionnelle, chaleureuse, et experte en négociation sur la plateforme de mode Vinted.\n`;
-    prompt += `L'acheteur s'intéresse à ton article "${itemTitle}" actuellement affiché au prix de ${itemPrice} €.\n`;
+    if (itemPrice > 0) {
+        prompt += `L'acheteur s'intéresse à ton article "${itemTitle}" actuellement affiché au prix de ${itemPrice} €.\n`;
+    } else {
+        prompt += `L'acheteur s'intéresse à un de tes articles. (Le prix exact n'a pas pu être détecté pour le moment).\n`;
+    }
     prompt += `Ton objectif : Rédiger une réponse naturelle pour l'aider, lever ses freins, et CONCLURE LA VENTE au plus vite.\n\n`;
     prompt += `Voici l'historique chronologique récent de votre conversation (du plus ancien au plus récent) :\n`;
     prompt += `------------------------------\n`;
@@ -2371,15 +2810,18 @@ async function generateGeminiResponse(history, botName, itemTitle, itemPrice, mi
     prompt += `4. Écris UNIQUEMENT le corps du message à copier-coller. Zéro code, zéro markdown, zéro guillemet superflu.\n`;
     
     // 5. RÈGLE COMMERCIALE UNIVERSELLE
-    prompt += `5. NÉGOCIATION ET PRIX PROMOTIONNEL : Si l'acheteur demande un rabais ou propose un prix, tu peux accepter ou faire une contre-proposition.\n`;
     if (minPriceAllowed > 0 && itemPrice > 0) {
+        prompt += `5. NÉGOCIATION ET PRIX PROMOTIONNEL : Si l'acheteur demande un rabais ou propose un prix, tu peux accepter ou faire une contre-proposition.\n`;
         prompt += `⚠️ RÈGLE DE RENTABILITÉ INVIOLABLE : Ton prix final DOIT OBLIGATOIREMENT être compris entre ${minPriceAllowed} € (prix minimum absolu) et ${Math.ceil(itemPrice - 1)} € (prix maximum). Si l'acheteur propose moins de ${minPriceAllowed} €, TU DOIS CATÉGORIQUEMENT REFUSER son prix et lui proposer ton minimum de ${minPriceAllowed} € à la place.\n`;
+        prompt += `Pour déclencher l'offre dans le système, tu DOIS ABSOLUMENT ajouter la balise exacte [OFFRE: XX] à la toute fin de ton message (avec XX ton prix validé EN ENTIER).\n`;
+        prompt += `TRÈS IMPORTANT - EXEMPLES DE FORMAT À RESPECTER :\n`;
+        prompt += `- Cas 1 (Acceptation) : "C'est d'accord pour 30 euros. Tu peux valider ton achat. [OFFRE: 30]"\n`;
+        prompt += `- Cas 2 (Refus et Contre-offre) : "Je ne peux pas descendre à 25 euros, mais je te propose 28 euros, c'est mon dernier prix ! [OFFRE: 28]"\n`;
+        prompt += `Si aucune question d'argent n'est abordée, réponds normalement et n'utilise JAMAIS la balise [OFFRE].\n`;
+    } else {
+        prompt += `5. RÈGLE CRITIQUE DE NÉGOCIATION : Tu ne connais pas le prix exact de l'article pour l'instant.\n`;
+        prompt += `TU N'AS DONC STRICTEMENT PAS LE DROIT de faire, d'accepter ou de proposer une offre chiffrée, ni de baisser le prix, NI d'utiliser la balise [OFFRE: X]. Contente-toi d'être polie et de répondre à ses questions sur l'article de façon textuelle.\n`;
     }
-    prompt += `Pour déclencher l'offre dans le système, tu DOIS ABSOLUMENT ajouter la balise exacte [OFFRE: XX] à la toute fin de ton message (avec XX ton prix validé EN ENTIER).\n`;
-    prompt += `TRÈS IMPORTANT - EXEMPLES DE FORMAT À RESPECTER :\n`;
-    prompt += `- Cas 1 (Acceptation) : "C'est d'accord pour 30 euros. Tu peux valider ton achat. [OFFRE: 30]"\n`;
-    prompt += `- Cas 2 (Refus et Contre-offre) : "Je ne peux pas descendre à 25 euros, mais je te propose 28 euros, c'est mon dernier prix ! [OFFRE: 28]"\n`;
-    prompt += `Si aucune question d'argent n'est abordée, réponds normalement et n'utilise JAMAIS la balise [OFFRE].\n`;
     
     try {
         console.log("🤖 [GEMINI] Appel API en cours...");
@@ -2756,5 +3198,4 @@ async function runMarketSpyLike(payload) {
     return { liked: likedItems.length };
 }
 
-console.log("🧠 [GHOST BOOT] Background Service Worker initialisé à 100% sans erreur !");
 

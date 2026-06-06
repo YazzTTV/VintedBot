@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "responseHeaders": [
+        {
+          "header": "Access-Control-Allow-Origin",
+          "operation": "set",
+          "value": "*"
+        }
+      ]
+    },
+    "condition": {
+      "urlFilter": "https://svc-shipping-labels.s3.eu-central-1.amazonaws.com/*",
+      "initiatorDomains": [
+        "vinted.fr", "vinted.it", "vinted.de", "vinted.es", "vinted.pt",
+        "vinted.be", "vinted.nl", "vinted.lu", "vinted.pl", "vinted.cz",
+        "vinted.sk", "vinted.lt", "vinted.lv", "vinted.at", "vinted.ch",
+        "vinted.dk", "vinted.fi", "vinted.se", "vinted.hu", "vinted.ro",
+        "vinted.si", "vinted.co.uk", "vinted.com", "vinteo.xyz"
+      ],
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]

@@ -85,9 +85,10 @@ export async function POST(request: Request) {
     const transporteur = formData.get('transporteur') as string || 'Mondial Relay'
     const numeroBordereau = formData.get('numeroBordereau') as string || ''
     const file = formData.get('file') as Blob | null
+    const s3Url = formData.get('s3Url') as string | null
 
     if (!venteId) throw new Error("ID de vente manquant")
-    if (!file) throw new Error("Bordereau PDF manquant")
+    if (!file && !s3Url) throw new Error("Bordereau PDF (file) ou s3Url manquant")
 
     const sale = await prisma.vente.findUnique({
       where: { id: venteId },
@@ -103,7 +104,17 @@ export async function POST(request: Request) {
 
     if (!sale) throw new Error("Vente introuvable")
 
-    const buffer = Buffer.from(await file.arrayBuffer())
+    let buffer: Buffer;
+    if (file) {
+      buffer = Buffer.from(await file.arrayBuffer())
+    } else if (s3Url) {
+      const resp = await fetch(s3Url)
+      if (!resp.ok) throw new Error(`Échec du téléchargement natif S3 : ${resp.statusText}`)
+      buffer = Buffer.from(await resp.arrayBuffer())
+    } else {
+      throw new Error("Bordereau manquant")
+    }
+
     const fileName = `labels/${venteId}_bordereau.pdf`
 
     const { error: uploadError } = await supabaseAdmin.storage

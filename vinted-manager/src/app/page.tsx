@@ -236,6 +236,45 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Commandes à Faire (Phase 2) */}
+      <section className="bg-zinc-950 border border-zinc-800/60 rounded-2xl p-6 shadow-2xl flex flex-col backdrop-blur-sm relative overflow-hidden">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <ShoppingBag className="w-5 h-5 text-indigo-400" />
+              À Commander Aujourd'hui
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">Articles vendus en attente d'achat fournisseur.</p>
+          </div>
+          <button className="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors shadow-md">
+            Voir le panier
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          {loading ? (
+            <div className="text-center py-6 text-zinc-500 text-xs animate-pulse">Chargement...</div>
+          ) : stats?.commandesAFaire?.length > 0 ? (
+            stats.commandesAFaire.map((cmd: any) => (
+              <div key={cmd.id} className="flex items-center justify-between p-3 bg-zinc-900/50 border border-zinc-800/50 rounded-xl">
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold text-white">{cmd.title}</span>
+                  <span className="text-xs text-zinc-500">Acheté par {cmd.buyer} pour {cmd.price}€</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-sm font-bold text-emerald-400">Bénéfice est. : {cmd.estimatedProfit}€</span>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Achat prévu : {cmd.purchasePrice}€</div>
+                </div>
+              </div>
+            ))
+          ) : (
+             <div className="text-center py-8 text-zinc-500 text-sm">
+               Aucune commande en attente.
+             </div>
+          )}
+        </div>
+      </section>
+
       {/* Flotte de Bots & Statuts Financiers Réels (Phase 2) */}
       <section className="bg-zinc-950 border border-zinc-800/60 rounded-2xl p-6 shadow-2xl flex flex-col backdrop-blur-sm relative overflow-hidden">
         {/* Decorative soft gradient behind section */}

@@ -39,6 +39,7 @@ Générer un maximum de cash flow rapidement.
 - [[[C] 2026-05-31]]
 - [[[C] 2026-06-01]]
 - [[[C] 2026-06-02]]
+- [[[C] 2026-06-03]]
 
 
 

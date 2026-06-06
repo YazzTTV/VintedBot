@@ -3,6 +3,7 @@ import prisma from '@/lib/prisma'
 import { trackingService, mapStatusToEnum } from '@/lib/tracking/tracking-service'
 import { sendParcelAlertsEmail } from '@/lib/notifications/email'
 import { ParcelStatus } from '@prisma/client'
+import { dispatchToLogistician } from '@/app/api/whatsapp/route'
 
 /**
  * GET /api/cron/sync-parcels
@@ -80,6 +81,37 @@ export async function GET(request: Request) {
             },
           })
         })
+
+        // --- NOUVEAU: Envoi automatique WhatsApp si le colis passe à LIVRE ---
+        if (statusEnum === ParcelStatus.LIVRE && parcel.status !== ParcelStatus.LIVRE) {
+          const ventes = await prisma.vente.findMany({
+            where: { parcelId: parcel.id },
+            include: { expedition: true, article: true }
+          })
+
+          for (const vente of ventes) {
+            if (vente.expedition?.bordereauUrl) {
+              await prisma.vente.update({
+                where: { id: vente.id },
+                data: { statut: 'A_EXPEDIER' }
+              })
+              
+              let imageUrl = 'https://via.placeholder.com/300?text=Image+Produit'
+              if (vente.article?.lienProduit) {
+                const sourcing = await prisma.sourcingProduct.findFirst({
+                  where: { url: vente.article.lienProduit }
+                })
+                if (sourcing?.imageUrl) {
+                  imageUrl = sourcing.imageUrl
+                }
+              }
+
+              console.log(`[Cron Tracking] Colis ${parcel.trackingNumber} livré. Dispatch WhatsApp pour la vente ${vente.id}...`)
+              await dispatchToLogistician(vente.id, imageUrl, vente.expedition.bordereauUrl)
+            }
+          }
+        }
+        // -------------------------------------------------------------------
 
         synced++
       } catch {
