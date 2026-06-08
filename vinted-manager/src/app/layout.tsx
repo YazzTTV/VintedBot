@@ -24,6 +24,12 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "default",
     title: "Vinted Manager",
+    startupImage: [],
+  },
+  icons: {
+    apple: [
+      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
+    ],
   },
 };
 

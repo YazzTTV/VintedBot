@@ -2472,6 +2472,66 @@ async function executeBotAction(tabId, action) {
                     return { ok: true };
                 }
 
+                if (type === "GENERATE_LABEL") {
+                    const { vintedTransactionId } = pay;
+                    if (!vintedTransactionId) throw new Error("vintedTransactionId manquant");
+
+                    // Étape 1 : Lire la transaction pour récupérer le shipment
+                    const txRes = await fetch(`/api/v2/transactions/${vintedTransactionId}`, {
+                        credentials: "include",
+                        headers: getHeaders(false)
+                    });
+                    if (!txRes.ok) throw new Error(`Impossible de lire la transaction ${vintedTransactionId} (HTTP ${txRes.status})`);
+                    const txData = await txRes.json();
+
+                    const transaction = txData.transaction || txData;
+                    const shipmentId = transaction.shipment?.id;
+                    let carrierName = transaction.shipment?.carrier?.name || '';
+
+                    if (!shipmentId) throw new Error("shipmentId introuvable dans la transaction");
+
+                    // Étape 2 : Récupérer l'URL du bordereau
+                    const labelRes = await fetch(`/api/v2/shipments/${shipmentId}/label_url`, {
+                        credentials: "include",
+                        headers: getHeaders(false)
+                    });
+                    if (!labelRes.ok) throw new Error(`Impossible de récupérer le label_url (HTTP ${labelRes.status})`);
+                    const labelData = await labelRes.json();
+
+                    const labelUrl = labelData.label_url || labelData.url;
+                    if (!labelUrl) throw new Error("label_url introuvable");
+
+                    // Étape 3 (non-bloquant) : Récupérer le numéro de suivi depuis journey_summary
+                    let trackingCode = '';
+                    try {
+                        const journeyRes = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/journey_summary`, {
+                            credentials: "include",
+                            headers: getHeaders(false)
+                        });
+                        if (journeyRes.ok) {
+                            const journeyData = await journeyRes.json();
+                            const carriers = (journeyData.journey_summary || journeyData).carriers || [];
+                            const current = carriers.find(c => c.is_current) || carriers[0];
+                            trackingCode = current?.tracking_code || '';
+                            if (!carrierName && current?.code) carrierName = current.code;
+                        }
+                    } catch (journeyErr) {
+                        console.warn('⚠️ [GENERATE_LABEL] journey_summary indisponible :', journeyErr.message);
+                    }
+
+                    // TODO : Si Vinted exige aussi une prolongation du délai côté Vinted (LOW confidence),
+                    // appeler POST /api/v2/shipments/{shipmentId}/deadline_extension
+                    // avec body { deadline_extension: { key: "5", reason: "..." } } — NON implémenté ici.
+
+                    return {
+                        ok: true,
+                        isLabel: true,
+                        labelUrl,
+                        transporteur: carrierName || 'Transporteur',
+                        trackingCode
+                    };
+                }
+
                 throw new Error(`Type d'action inconnu : ${type}`);
             } catch (err) {
                 throw new Error(err.message);
@@ -2483,7 +2543,7 @@ async function executeBotAction(tabId, action) {
     // Si injection a throwé une erreur, elle arrive ici
     const finalRes = result?.[0]?.result;
     if (finalRes && finalRes.ok) {
-        return true;
+        return finalRes;
     }
     throw new Error("Script d'injection retourné invalide.");
 }

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { fuzzyMatch } from '@/lib/utils'
+import { sendPush } from '@/lib/notifications/push'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -241,6 +242,14 @@ export async function POST(request: Request) {
                 purchasePriceSnapshot: prixAchat,
                 lienVente: syncedOrder.itemId ? `https://vinted.fr/items/${syncedOrder.itemId}` : null
               }
+            })
+
+            // Notification push : nouvelle vente
+            await sendPush({
+              title: 'Nouvelle vente',
+              body: `${syncedOrder.title} - ${prixVente} EUR (${syncedOrder.buyerLogin || 'Inconnu'})`,
+              url: '/ventes',
+              tag: 'sale'
             })
 
             // 2. Mettre à jour le statut de l'Article (seulement si ce n'est pas déjà fait par l'Urgence)

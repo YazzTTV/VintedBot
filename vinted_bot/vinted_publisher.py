@@ -184,8 +184,8 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
                 except Exception:
                     continue
             
-            # --- ÉTAPE 6 : Taille (si vêtement) ---
-            if config.niche != "stroller":
+            # --- ÉTAPE 6 : Taille (si la niche utilise un champ de taille) ---
+            if config.niche_def.uses_size:
                 print(f"[Publisher] Sélection de la Taille : {config.size}")
                 # Cliquer sur le champ de taille
                 size_trigger = None

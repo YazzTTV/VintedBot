@@ -1,6 +1,9 @@
 import os
 import json
 
+# niche_loader est dans le meme dossier — import tardif pour eviter les imports circulaires
+# (utilise la property niche_def ci-dessous)
+
 BASE_DIR = r"D:\AntiGravity\02 Projects\Business Vinted"
 ACCOUNTS_ROOT = os.path.join(BASE_DIR, "Accounts")
 BOT_DIR = os.path.join(BASE_DIR, "vinted_bot")
@@ -32,7 +35,19 @@ class AccountConfig:
         self.cdp_port = 9222 # Port par défaut pour CDP
         
         self._load_settings()
- 
+        self._niche_def = None  # Chargement paresseux via la property niche_def
+
+    @property
+    def niche_def(self):
+        """
+        Retourne la NicheDefinition correspondant a self.niche.
+        Chargement paresseux : la definition est lue une seule fois et mise en cache.
+        """
+        if self._niche_def is None:
+            from niche_loader import load_niche
+            self._niche_def = load_niche(self.niche)
+        return self._niche_def
+
     def _load_settings(self):
         if os.path.exists(self.settings_path):
             try:

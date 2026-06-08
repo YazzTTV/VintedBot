@@ -65,7 +65,7 @@ async def dismiss_popups(page):
     except Exception as e:
         print(f"[Scraper] Note popups : {e}")
 
-async def scrape_products(count: int, url: str, output_dir: str, archive_dir: str, niche: str = "garment"):
+async def scrape_products(count: int, url: str, output_dir: str, archive_dir: str, niche: str = "garment", niche_def=None):
     os.makedirs(output_dir, exist_ok=True)
     
     if not start_edge():
@@ -297,24 +297,27 @@ async def scrape_products(count: int, url: str, output_dir: str, archive_dir: st
                         print(f"[Scraper] Produit de la marque SHEIN ignore : {product_url_base.split('/')[-1]}")
                         continue
                         
-                    # --- Filtre strict de catégories selon la niche ---
+                    # --- Filtre strict de catégories selon la niche (config-driven) ---
                     product_url_lower = product_url.lower()
-                    
-                    if niche == "stroller":
-                        # Pour les poussettes : s'assurer qu'on reste sur la thématique pet stroller/hondenbuggy/poussette
-                        inclusion_words = ["stroller", "poussette", "buggy", "hondenbuggy", "pet", "chien", "dog"]
-                        if not any(word in product_url_lower for word in inclusion_words):
-                            continue
+
+                    # Charger les listes depuis la definition de niche si disponible,
+                    # sinon retomber sur les valeurs hardcodees de la niche garment (retrocompat)
+                    if niche_def is not None:
+                        _keywords_include = niche_def.keywords_include
+                        _keywords_exclude = niche_def.keywords_exclude
                     else:
-                        # Éliminer absolument les maillots de bain, bikini, beachwear, bodysuits qui bloquent la modération GPT
-                        exclusion_words = ["swim", "bikini", "maillot", "beachwear", "bodysuit", "romper", "jumpsuit"]
-                        if any(word in product_url_lower for word in exclusion_words):
-                            continue
-                            
-                        # S'assurer qu'il s'agit bien d'une robe (dress/robe) ou d'une jupe (skirt/jupe)
-                        inclusion_words = ["dress", "robe", "skirt", "jupe"]
-                        if not any(word in product_url_lower for word in inclusion_words):
-                            continue
+                        # Fallback legacy : reproduit exactement le comportement original
+                        if niche == "stroller":
+                            _keywords_include = ["stroller", "poussette", "buggy", "hondenbuggy", "pet", "chien", "dog"]
+                            _keywords_exclude = []
+                        else:
+                            _keywords_include = ["dress", "robe", "skirt", "jupe"]
+                            _keywords_exclude = ["swim", "bikini", "maillot", "beachwear", "bodysuit", "romper", "jumpsuit"]
+
+                    if _keywords_exclude and any(word in product_url_lower for word in _keywords_exclude):
+                        continue
+                    if _keywords_include and not any(word in product_url_lower for word in _keywords_include):
+                        continue
                         
                     # Trouver l'image principale de cette carte
                     img_el = None
@@ -455,21 +458,27 @@ if __name__ == "__main__":
     
     # Récupération de la configuration du compte
     config = get_account_config(args.account)
-    
-    # URL par défaut adaptée selon la niche
-    start_url = args.url
-    if args.url == "https://fr.shein.com/Women-Dresses-c-1727.html?tag_ids=quickship&price_max=15" and config.niche == "stroller":
-        start_url = "https://fr.shein.com/sr/?q=poussette+pour+chien&tag_ids=quickship&price_max=60"
-        
+
+    # Charger la definition de niche (config-driven)
+    niche_def = config.niche_def
+
+    # URL par défaut : si l'utilisateur n'a pas fourni d'URL personnalisee,
+    # utiliser celle de la definition de niche (remplace l'ancien if niche=="stroller")
+    garment_default_url = "https://fr.shein.com/Women-Dresses-c-1727.html?tag_ids=quickship&price_max=15"
+    if args.url == garment_default_url:
+        start_url = niche_def.default_start_url
+    else:
+        start_url = args.url
+
     final_output_dir = args.output_dir if args.output_dir else config.input_dir
-    
+
     print("="*50)
     print(f"DEMARRAGE DU SCRAPER SHEIN [COMPTE : {config.name.upper()}]")
     print(f"Quantite cible : {args.count}")
     print(f"URL de depart  : {start_url}")
     print(f"Dossier de sortie : {final_output_dir}")
     print(f"Dossier archive   : {config.archive_dir}")
-    print(f"Niche              : {config.niche.upper()}")
+    print(f"Niche              : {config.niche.upper()} ({niche_def.display_name})")
     print("="*50 + "\n")
-    
-    asyncio.run(scrape_products(args.count, start_url, final_output_dir, config.archive_dir, config.niche))
+
+    asyncio.run(scrape_products(args.count, start_url, final_output_dir, config.archive_dir, config.niche, niche_def=niche_def))

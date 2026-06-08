@@ -246,20 +246,28 @@ def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr", n
         instructions_langue = f"IMPORTANT : Rédige le titre et la description EXCLUSIVEMENT dans la langue liée au code '{language}'."
         phrases_typiques = ""
 
-    # Injection des variables dans le prompt global selon la niche
-    if niche.lower() == "stroller":
-        final_prompt = PROMPT_ANALYSE_STROLLER.format(
-            PERSONA=persona,
-            CONSIGNES_LANGUE=instructions_langue,
-            PHRASES_TYPIQUES=phrases_typiques
-        )
-    else:
-        final_prompt = PROMPT_ANALYSE.format(
-            PERSONA=persona,
-            CONSIGNES_LANGUE=instructions_langue,
-            PHRASES_TYPIQUES=phrases_typiques,
-            TAILLE_CIBLE=size
-        )
+    # Injection des variables dans le prompt — driven by niche definition when available,
+    # sinon fallback sur les constantes hardcodees (retrocompat)
+    from niche_loader import load_niche
+    try:
+        niche_def = load_niche(niche.lower())
+        prompt_template = niche_def.analysis_prompt
+        declared_vars = niche_def.analysis_prompt_variables
+    except FileNotFoundError:
+        # Niche inconnue : utiliser le prompt garment par defaut
+        print(f"[Processor] [WARN] Niche '{niche}' introuvable — fallback sur le prompt garment.")
+        prompt_template = PROMPT_ANALYSE
+        declared_vars = ["PERSONA", "CONSIGNES_LANGUE", "PHRASES_TYPIQUES", "TAILLE_CIBLE"]
+
+    # Construire le dict de substitution avec uniquement les variables declarees
+    substitutions = {
+        "PERSONA": persona,
+        "CONSIGNES_LANGUE": instructions_langue,
+        "PHRASES_TYPIQUES": phrases_typiques,
+        "TAILLE_CIBLE": size,
+    }
+    format_kwargs = {k: v for k, v in substitutions.items() if k in declared_vars}
+    final_prompt = prompt_template.format(**format_kwargs)
 
     try:
         from PIL import Image
