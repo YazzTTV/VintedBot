@@ -1,0 +1,18 @@
+{
+  "name": "tech",
+  "display_name": "Accessoires tech & gadgets",
+  "default_start_url": "https://fr.shein.com/sr/?q=accessoire+telephone&tag_ids=quickship&price_max=20",
+  "keywords_include": ["phone", "cable", "charger", "earphone", "headphone", "gadget", "usb", "case", "cover", "speaker", "watch", "smartwatch", "coque", "chargeur", "ecouteur", "montre"],
+  "keywords_exclude": ["clothing", "dress", "shirt", "pants", "shoe", "swimwear", "bag"],
+  "uses_size": false,
+  "analysis_prompt": "{PERSONA}\nJe te donne une capture d'ecran d'un accessoire tech ou gadget electronique sur un site e-commerce.\n\nIMPORTANT : Ne mentionne JAMAIS la marque du site d'origine (Shein, Temu, AliExpress, etc.) dans le titre ou la description. Le nom de la marque ne doit figurer sous aucun pretexte.\n\nIMPORTANT : Ne cree aucun fichier, document Google Docs ou PDF. N'utilise aucun outil. Reponds directement en texte brut.\n\nEffectue les taches suivantes :\n1. Identifie l'accessoire tech (type, couleur, connectique ou compatibilite visible, caracteristiques principales).\n2. Redige un titre clair et precis pour Vinted (max 40 caracteres). {CONSIGNES_LANGUE} IMPORTANT : N'utilise AUCUN emoji (pas de smileys, pas de coeurs, etc.).\n3. Redige une description COURTE et CONCISE pour Vinted (maximum 3 à 4 courtes phrases simples). Le ton doit etre clair et informatif. N'utilise AUCUN hashtag (#) et N'utilise AUCUN emoji. {PHRASES_TYPIQUES} Precise obligatoirement l'etat (Neuf), la couleur et toute information de compatibilite ou specification visible.\n4. Propose un court prompt en anglais decrivant uniquement l'apparence et les caracteristiques de l'accessoire (ex: \"A white USB-C braided charging cable with aluminum connectors\").\n\nFormate obligatoirement ta reponse avec ces balises precises :\n\n[TITRE_VINTED]\n(titre ici)\n[/TITRE_VINTED]\n\n[DESCRIPTION_VINTED]\n(description ici)\n[/DESCRIPTION_VINTED]\n\n[PROMPT_IMAGE_ANGLAIS]\n(prompt ici)\n[/PROMPT_IMAGE_ANGLAIS]",
+  "analysis_prompt_variables": ["PERSONA", "CONSIGNES_LANGUE", "PHRASES_TYPIQUES"],
+  "image_recipe": [
+    "product_on_surface",
+    "product_in_context"
+  ],
+  "output_images": {
+    "product_on_surface": "selfie_upscaled.jpg",
+    "product_in_context": "flat_lay_upscaled.jpg"
+  }
+}

@@ -341,3 +341,15 @@ model WhatsappLog {
   createdAt      DateTime @default(now())
 }
 
+// ── Web Push Subscriptions ────────────────────────────────────────────────────
+// Appliquer au schema avec: npx prisma db push
+
+model PushSubscription {
+  id        String   @id @default(uuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userId    String
+  createdAt DateTime @default(now())
+}
+

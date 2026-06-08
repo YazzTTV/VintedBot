@@ -555,99 +555,240 @@ async def generate_all_images_parallel_async(
     floor_template_path: str,
     hanger_template_path: str,
     product_dir: str,
-    prompt: str
+    prompt: str,
+    niche_def=None
 ) -> dict:
     """
     Orchestrateur asynchrone qui connecte à Edge CDP une seule fois,
     lance les générations d'images en parallèle sur plusieurs onglets,
     puis enchaîne l'image de profil une fois le selfie terminé.
+
+    Le comportement est entièrement piloté par niche_def.image_recipe.
+    Si niche_def est None, le code retombe sur l'ancien branchement hardcoded
+    (garment vs stroller) pour une compatibilité ascendante totale.
+
+    Dispatch map — recipe_key -> coroutine factory :
+      selfie              : task_generate_selfie(context, file_path, avatar_path, output, prompt, lock)
+      flat_lay            : task_generate_flat_lay(context, file_path, floor_template_path, output, prompt, lock)
+      hanger              : task_generate_hanger(context, file_path, hanger_template_path, output, lock)
+      profile             : task_generate_profile(context, selfie_output, output, lock)  [depend de selfie]
+      folded              : task_generate_folded(context, file_path, floor_template_path, output, prompt, lock)
+      selfie_hand_in_hair : task_generate_selfie_hand_in_hair(context, selfie_output, output, lock)  [depend de selfie]
+      stroller_domestic   : task_generate_stroller_domestic(context, file_path, output, prompt, lock)
+      stroller_with_dog   : task_generate_stroller_with_dog(context, file_path, output, prompt, lock)
+      product_on_surface  : reutilise task_generate_flat_lay (generique deco/tech)
+                            TODO : creer un generateur dedie avec un prompt "objet pose sur surface" pour meilleure qualite
+      product_in_context  : reutilise task_generate_folded (generique deco/tech)
+                            TODO : creer un generateur dedie avec un prompt "objet dans son contexte d'utilisation"
     """
     print(f"\n[ChatGPT Parallel] Démarrage du pipeline asynchrone (Niche : {niche.upper()})...")
-    
+
     if not start_edge():
         print("[ChatGPT Parallel] ERREUR : Impossible de démarrer Edge.")
         return {}
 
-    is_stroller = (niche == "stroller")
-    results = {
-        "selfie_upscaled": None,
-        "flat_lay_upscaled": None,
-        "profile_upscaled": None,
-        "hanger_upscaled": None,
-        "folded_upscaled": None,
-        "selfie_hand_in_hair_upscaled": None
-    }
-    
+    # Initialiser le dict results depuis output_images de la def, ou valeurs legacy
+    if niche_def is not None:
+        results = {v: None for v in niche_def.output_images.values()}
+        # S'assurer que les cles canoniques legacy existent aussi pour la retrocompat publisher
+        for legacy_key in ("selfie_upscaled", "flat_lay_upscaled", "profile_upscaled",
+                           "hanger_upscaled", "folded_upscaled", "selfie_hand_in_hair_upscaled"):
+            if legacy_key not in results:
+                results[legacy_key] = None
+        recipe = niche_def.image_recipe
+        output_map = niche_def.output_images  # recipe_key -> filename
+    else:
+        # Fallback legacy complet (comportement byte-equivalent a l'ancien code)
+        results = {
+            "selfie_upscaled": None,
+            "flat_lay_upscaled": None,
+            "profile_upscaled": None,
+            "hanger_upscaled": None,
+            "folded_upscaled": None,
+            "selfie_hand_in_hair_upscaled": None
+        }
+        recipe = None
+        output_map = {}
+
     async with async_playwright() as p:
         try:
             print("[ChatGPT Parallel] Connexion au navigateur Edge existant (CDP)...")
             browser = await p.chromium.connect_over_cdp(CDP_URL)
             context = browser.contexts[0]
             dalle_lock = asyncio.Lock()
-            
-            if is_stroller:
-                selfie_path = os.path.join(product_dir, "selfie_upscaled.jpg")
-                flat_lay_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
-                
-                print("[ChatGPT Parallel] Lancement des 2 tâches poussettes en parallèle...")
-                task1 = task_generate_stroller_domestic(context, file_path, selfie_path, prompt, dalle_lock)
-                task2 = task_generate_stroller_with_dog(context, file_path, flat_lay_path, prompt, dalle_lock)
-                
-                res1, res2 = await asyncio.gather(task1, task2)
-                if res1:
-                    results["selfie_upscaled"] = selfie_path
-                if res2:
-                    results["flat_lay_upscaled"] = flat_lay_path
-                    
-            else:
-                selfie_path = os.path.join(product_dir, "selfie_upscaled.jpg")
-                flat_lay_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
-                hanger_path = os.path.join(product_dir, "hanger_upscaled.jpg")
-                
-                print("[ChatGPT Parallel] Lancement des 3 tâches vêtements en parallèle (Selfie, Flat Lay, Cintre)...")
-                task1 = task_generate_selfie(context, file_path, avatar_path, selfie_path, prompt, dalle_lock)
-                task2 = task_generate_flat_lay(context, file_path, floor_template_path, flat_lay_path, prompt, dalle_lock)
-                task3 = task_generate_hanger(context, file_path, hanger_template_path, hanger_path, dalle_lock)
-                
-                res1, res2, res3 = await asyncio.gather(task1, task2, task3)
-                
-                if res1:
-                    results["selfie_upscaled"] = selfie_path
-                if res2:
-                    results["flat_lay_upscaled"] = flat_lay_path
-                if res3:
-                    results["hanger_upscaled"] = hanger_path
-                
-                # Étape séquentielle secondaire : Génération de profil, article plié, et selfie cheveux
-                tasks_batch_2 = []
-                profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
-                folded_path = os.path.join(product_dir, "folded_upscaled.jpg")
-                selfie_hair_path = os.path.join(product_dir, "selfie_hand_in_hair_upscaled.jpg")
-                
-                print("[ChatGPT Parallel] Lancement du deuxième batch (Profil, Plié, Selfie Cheveux)...")
-                if res1:
-                    tasks_batch_2.append(task_generate_profile(context, selfie_path, profile_path, dalle_lock))
-                    tasks_batch_2.append(task_generate_selfie_hand_in_hair(context, selfie_path, selfie_hair_path, dalle_lock))
+
+            if recipe is None:
+                # --- FALLBACK LEGACY : comportement original hardcode ---
+                is_stroller = (niche == "stroller")
+                if is_stroller:
+                    selfie_path = os.path.join(product_dir, "selfie_upscaled.jpg")
+                    flat_lay_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
+
+                    print("[ChatGPT Parallel] [Legacy] Lancement des 2 tâches poussettes en parallèle...")
+                    res1, res2 = await asyncio.gather(
+                        task_generate_stroller_domestic(context, file_path, selfie_path, prompt, dalle_lock),
+                        task_generate_stroller_with_dog(context, file_path, flat_lay_path, prompt, dalle_lock)
+                    )
+                    if res1:
+                        results["selfie_upscaled"] = selfie_path
+                    if res2:
+                        results["flat_lay_upscaled"] = flat_lay_path
                 else:
-                    async def dummy_task(): return False
-                    tasks_batch_2.append(dummy_task())
-                    tasks_batch_2.append(dummy_task())
-                    
-                tasks_batch_2.append(task_generate_folded(context, file_path, floor_template_path, folded_path, prompt, dalle_lock))
-                
-                res4, res5, res6 = await asyncio.gather(*tasks_batch_2)
-                
-                if res1 and res4:
-                    results["profile_upscaled"] = profile_path
-                if res1 and res5:
-                    results["selfie_hand_in_hair_upscaled"] = selfie_hair_path
-                if res6:
-                    results["folded_upscaled"] = folded_path
-            
+                    selfie_path = os.path.join(product_dir, "selfie_upscaled.jpg")
+                    flat_lay_path = os.path.join(product_dir, "flat_lay_upscaled.jpg")
+                    hanger_path = os.path.join(product_dir, "hanger_upscaled.jpg")
+
+                    print("[ChatGPT Parallel] [Legacy] Lancement des 3 tâches vêtements en parallèle (Selfie, Flat Lay, Cintre)...")
+                    res1, res2, res3 = await asyncio.gather(
+                        task_generate_selfie(context, file_path, avatar_path, selfie_path, prompt, dalle_lock),
+                        task_generate_flat_lay(context, file_path, floor_template_path, flat_lay_path, prompt, dalle_lock),
+                        task_generate_hanger(context, file_path, hanger_template_path, hanger_path, dalle_lock)
+                    )
+                    if res1:
+                        results["selfie_upscaled"] = selfie_path
+                    if res2:
+                        results["flat_lay_upscaled"] = flat_lay_path
+                    if res3:
+                        results["hanger_upscaled"] = hanger_path
+
+                    profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
+                    folded_path = os.path.join(product_dir, "folded_upscaled.jpg")
+                    selfie_hair_path = os.path.join(product_dir, "selfie_hand_in_hair_upscaled.jpg")
+
+                    print("[ChatGPT Parallel] [Legacy] Lancement du deuxième batch (Profil, Plié, Selfie Cheveux)...")
+                    if res1:
+                        tasks_batch_2 = [
+                            task_generate_profile(context, selfie_path, profile_path, dalle_lock),
+                            task_generate_selfie_hand_in_hair(context, selfie_path, selfie_hair_path, dalle_lock)
+                        ]
+                    else:
+                        async def dummy_task(): return False
+                        tasks_batch_2 = [dummy_task(), dummy_task()]
+
+                    tasks_batch_2.append(task_generate_folded(context, file_path, floor_template_path, folded_path, prompt, dalle_lock))
+                    res4, res5, res6 = await asyncio.gather(*tasks_batch_2)
+
+                    if res1 and res4:
+                        results["profile_upscaled"] = profile_path
+                    if res1 and res5:
+                        results["selfie_hand_in_hair_upscaled"] = selfie_hair_path
+                    if res6:
+                        results["folded_upscaled"] = folded_path
+
+            else:
+                # --- CONFIG-DRIVEN : execution selon image_recipe ---
+                # Les recettes "profile" et "selfie_hand_in_hair" dependent du resultat "selfie"
+                # => batch 1 : toutes sauf les deux dependantes
+                # => batch 2 : les dependantes si selfie reussi
+
+                SELFIE_DEPENDENT = {"profile", "selfie_hand_in_hair"}
+
+                batch1_keys = [k for k in recipe if k not in SELFIE_DEPENDENT]
+                batch2_keys = [k for k in recipe if k in SELFIE_DEPENDENT]
+
+                # Construire les coroutines du batch 1
+                async def _make_task(key, out_filename):
+                    out_path = os.path.join(product_dir, out_filename)
+                    if key == "selfie":
+                        return key, out_path, await task_generate_selfie(context, file_path, avatar_path, out_path, prompt, dalle_lock)
+                    elif key == "flat_lay":
+                        return key, out_path, await task_generate_flat_lay(context, file_path, floor_template_path, out_path, prompt, dalle_lock)
+                    elif key == "hanger":
+                        return key, out_path, await task_generate_hanger(context, file_path, hanger_template_path, out_path, dalle_lock)
+                    elif key == "folded":
+                        return key, out_path, await task_generate_folded(context, file_path, floor_template_path, out_path, prompt, dalle_lock)
+                    elif key == "stroller_domestic":
+                        return key, out_path, await task_generate_stroller_domestic(context, file_path, out_path, prompt, dalle_lock)
+                    elif key == "stroller_with_dog":
+                        return key, out_path, await task_generate_stroller_with_dog(context, file_path, out_path, prompt, dalle_lock)
+                    elif key == "product_on_surface":
+                        # TODO : creer task_generate_product_on_surface dedie pour deco/tech
+                        # Pour l'instant, reutilise flat_lay avec le prompt generique de la niche
+                        return key, out_path, await task_generate_flat_lay(context, file_path, floor_template_path, out_path, prompt, dalle_lock)
+                    elif key == "product_in_context":
+                        # TODO : creer task_generate_product_in_context dedie pour deco/tech
+                        # Pour l'instant, reutilise folded avec le prompt generique de la niche
+                        return key, out_path, await task_generate_folded(context, file_path, floor_template_path, out_path, prompt, dalle_lock)
+                    else:
+                        print(f"[ChatGPT Parallel] [WARN] Cle de recette inconnue : '{key}' — ignoree.")
+                        return key, out_path, False
+
+                print(f"[ChatGPT Parallel] Batch 1 : {batch1_keys}")
+                batch1_results = await asyncio.gather(*[
+                    _make_task(k, output_map.get(k, f"{k}_upscaled.jpg"))
+                    for k in batch1_keys
+                ])
+
+                # Recuperer le chemin selfie si present (pour les taches dependantes)
+                selfie_result_path = None
+                selfie_success = False
+                for key, out_path, ok in batch1_results:
+                    if ok:
+                        results[output_map.get(key, f"{key}_upscaled.jpg")] = out_path
+                        # Compatibilite publisher : assigner aussi sous la cle canonique
+                        canonical = _canonical_result_key(key, output_map)
+                        if canonical:
+                            results[canonical] = out_path
+                    if key == "selfie":
+                        selfie_result_path = out_path
+                        selfie_success = ok
+
+                # Batch 2 : taches dependantes du selfie
+                if batch2_keys:
+                    print(f"[ChatGPT Parallel] Batch 2 (dependant selfie) : {batch2_keys}")
+                    if not selfie_success:
+                        async def dummy_task(): return False
+                        batch2_coros = [dummy_task() for _ in batch2_keys]
+                    else:
+                        batch2_coros = []
+                        for k in batch2_keys:
+                            out_filename = output_map.get(k, f"{k}_upscaled.jpg")
+                            out_path = os.path.join(product_dir, out_filename)
+                            if k == "profile":
+                                batch2_coros.append(
+                                    _make_task_dependent(k, selfie_result_path, out_path, context, dalle_lock)
+                                )
+                            elif k == "selfie_hand_in_hair":
+                                batch2_coros.append(
+                                    _make_task_dependent(k, selfie_result_path, out_path, context, dalle_lock)
+                                )
+
+                    batch2_results = await asyncio.gather(*batch2_coros)
+                    if selfie_success:
+                        for (key, out_path, ok) in batch2_results:
+                            if ok:
+                                results[output_map.get(key, f"{key}_upscaled.jpg")] = out_path
+                                canonical = _canonical_result_key(key, output_map)
+                                if canonical:
+                                    results[canonical] = out_path
+
             await browser.close()
             print("[ChatGPT Parallel] Fin du pipeline asynchrone.")
             return results
-            
+
         except Exception as e:
             print(f"[ChatGPT Parallel] Erreur critique dans l'orchestrateur : {e}")
             return results
+
+
+def _canonical_result_key(recipe_key: str, output_map: dict) -> str:
+    """
+    Retourne la cle canonique legacy dans results (ex: 'selfie_upscaled')
+    a partir d'une cle de recette (ex: 'selfie').
+    Permet a vinted_publisher.py de continuer a chercher selfie_upscaled.jpg etc.
+    """
+    out_filename = output_map.get(recipe_key, "")
+    # Enlever l'extension pour obtenir la cle
+    base = os.path.splitext(out_filename)[0] if out_filename else ""
+    return base if base else None
+
+
+async def _make_task_dependent(key: str, input_path: str, output_path: str, context, lock):
+    """Execute les taches dependantes du selfie (profile, selfie_hand_in_hair)."""
+    if key == "profile":
+        ok = await task_generate_profile(context, input_path, output_path, lock)
+    elif key == "selfie_hand_in_hair":
+        ok = await task_generate_selfie_hand_in_hair(context, input_path, output_path, lock)
+    else:
+        ok = False
+    return key, output_path, ok

@@ -1,0 +1,18 @@
+{
+  "name": "stroller",
+  "display_name": "Poussettes pour chien",
+  "default_start_url": "https://fr.shein.com/sr/?q=poussette+pour+chien&tag_ids=quickship&price_max=60",
+  "keywords_include": ["stroller", "poussette", "buggy", "hondenbuggy", "pet", "chien", "dog"],
+  "keywords_exclude": [],
+  "uses_size": false,
+  "analysis_prompt": "{PERSONA}\nJe te donne une capture d'ecran d'une poussette pour chien sur un site e-commerce (Shein).\n\nIMPORTANT : Ne mentionne JAMAIS la marque du site d'origine (Shein, Temu, AliExpress, etc.) dans le titre ou la description. Le nom de la marque ne doit figurer sous aucun pretexte.\n\nIMPORTANT : Ne cree aucun fichier, document Google Docs ou PDF. N'utilise aucun outil. Reponds directement en texte brut.\n\nEffectue les taches suivantes :\n1. Identifie la poussette (type, couleur, materiaux apparents, fonctionnalites comme pliable, panier de rangement, etc.).\n2. Redige un titre clair et sympa pour Vinted (max 40 caracteres). {CONSIGNES_LANGUE} IMPORTANT : N'utilise AUCUN emoji (pas de smileys, pas de coeurs, etc.).\n3. Redige une description COURTE et CONCISE pour Vinted (maximum 3 à 4 courtes phrases simples). Le ton doit etre naturel, chaleureux, professionnel mais pas du tout robotique. N'utilise AUCUN hashtag (#) et N'utilise AUCUN emoji. {PHRASES_TYPIQUES} Precise obligatoirement l'etat (Neuf dans son emballage d'origine) et les fonctionnalites pratiques (pliable, roues robustes, espace confortable pour l'animal).\n4. Propose un court prompt en anglais decrivant uniquement le design, la couleur et la structure de la poussette (ex: \"A modern black lightweight foldable dog stroller with four wheels and a mesh window\").\n\nFormate obligatoirement ta reponse avec ces balises precises :\n\n[TITRE_VINTED]\n(titre ici)\n[/TITRE_VINTED]\n\n[DESCRIPTION_VINTED]\n(description ici)\n[/DESCRIPTION_VINTED]\n\n[PROMPT_IMAGE_ANGLAIS]\n(prompt ici)\n[/PROMPT_IMAGE_ANGLAIS]",
+  "analysis_prompt_variables": ["PERSONA", "CONSIGNES_LANGUE", "PHRASES_TYPIQUES"],
+  "image_recipe": [
+    "stroller_domestic",
+    "stroller_with_dog"
+  ],
+  "output_images": {
+    "stroller_domestic": "selfie_upscaled.jpg",
+    "stroller_with_dog": "flat_lay_upscaled.jpg"
+  }
+}

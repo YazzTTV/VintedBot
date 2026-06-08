@@ -1,0 +1,18 @@
+{
+  "name": "deco",
+  "display_name": "Decoration interieure",
+  "default_start_url": "https://fr.shein.com/sr/?q=decoration+maison&tag_ids=quickship&price_max=25",
+  "keywords_include": ["decor", "lamp", "vase", "cushion", "candle", "frame", "shelf", "mirror", "deco", "home", "maison", "lampe", "bougie", "coussin", "cadre", "etagere", "miroir"],
+  "keywords_exclude": ["clothing", "dress", "shirt", "pants", "shoe", "bag", "swimwear"],
+  "uses_size": false,
+  "analysis_prompt": "{PERSONA}\nJe te donne une capture d'ecran d'un objet de decoration interieure sur un site e-commerce.\n\nIMPORTANT : Ne mentionne JAMAIS la marque du site d'origine (Shein, Temu, AliExpress, etc.) dans le titre ou la description. Le nom de la marque ne doit figurer sous aucun pretexte.\n\nIMPORTANT : Ne cree aucun fichier, document Google Docs ou PDF. N'utilise aucun outil. Reponds directement en texte brut.\n\nEffectue les taches suivantes :\n1. Identifie l'objet (type, couleur, matiere apparente, style, dimensions estimees si visibles).\n2. Redige un titre clair et sympa pour Vinted (max 40 caracteres). {CONSIGNES_LANGUE} IMPORTANT : N'utilise AUCUN emoji (pas de smileys, pas de coeurs, etc.).\n3. Redige une description COURTE et CONCISE pour Vinted (maximum 3 à 4 courtes phrases simples). Le ton doit etre naturel et chaleureux. N'utilise AUCUN hashtag (#) et N'utilise AUCUN emoji. {PHRASES_TYPIQUES} Precise obligatoirement la matiere, la couleur dominante et l'etat (Neuf).\n4. Propose un court prompt en anglais decrivant uniquement le design et l'apparence de l'objet (ex: \"A minimalist white ceramic vase with geometric patterns\").\n\nFormate obligatoirement ta reponse avec ces balises precises :\n\n[TITRE_VINTED]\n(titre ici)\n[/TITRE_VINTED]\n\n[DESCRIPTION_VINTED]\n(description ici)\n[/DESCRIPTION_VINTED]\n\n[PROMPT_IMAGE_ANGLAIS]\n(prompt ici)\n[/PROMPT_IMAGE_ANGLAIS]",
+  "analysis_prompt_variables": ["PERSONA", "CONSIGNES_LANGUE", "PHRASES_TYPIQUES"],
+  "image_recipe": [
+    "product_on_surface",
+    "product_in_context"
+  ],
+  "output_images": {
+    "product_on_surface": "selfie_upscaled.jpg",
+    "product_in_context": "flat_lay_upscaled.jpg"
+  }
+}

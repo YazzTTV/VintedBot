@@ -309,7 +309,8 @@ class ScreenshotHandler(FileSystemEventHandler):
                     self.config.floor_template_path,
                     final_hanger_template,
                     product_dir,
-                    prompt
+                    prompt,
+                    niche_def=self.config.niche_def
                 )
             )
             selfie_upscaled_path = image_results.get("selfie_upscaled")

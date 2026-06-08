@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { sendPush } from '@/lib/notifications/push'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*', 
@@ -64,6 +65,9 @@ export async function POST(request: Request) {
         messages
       } = conv
 
+      // Anti-spam : charger l'état précédent de la conversation avant l'upsert
+      const prevConv = await prisma.vintedConversation.findUnique({ where: { id } })
+
       // Enregistrer ou mettre à jour la conversation
       await prisma.vintedConversation.upsert({
         where: { id: id },
@@ -94,11 +98,34 @@ export async function POST(request: Request) {
           syncedAt: new Date()
         }
       })
+      // Notification push : nouvelle offre (transition false → true sur hasOffer)
+      if (!!hasOffer && (prevConv === null || prevConv.hasOffer === false)) {
+        await sendPush({
+          title: 'Offre recue',
+          body: `${buyerUsername} propose ${offerPrice} EUR sur ${title}`,
+          url: '/inbox',
+          tag: `offer-${id}`
+        })
+      }
+
       conversationCount++
 
       // Injecter les messages associés
       if (Array.isArray(messages)) {
         for (const msg of messages) {
+          // Anti-spam : vérifier si le message est vraiment nouveau
+          const existingMsg = await prisma.vintedMessage.findUnique({ where: { id: msg.id } })
+
+          // Notification push : nouveau message de l'acheteur (pas du bot)
+          if (existingMsg === null && msg.senderUsername === buyerUsername) {
+            await sendPush({
+              title: 'Nouveau message',
+              body: `${msg.senderUsername}: ${String(msg.content).slice(0, 80)}`,
+              url: '/inbox',
+              tag: `msg-${id}`
+            })
+          }
+
           await prisma.vintedMessage.upsert({
             where: { id: msg.id },
             update: {

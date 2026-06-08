@@ -21,6 +21,7 @@ import {
   Shirt
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import PushToggle from "@/components/PushToggle"
 
 const navigation = [
   { name: 'Dashboard', href: '/', icon: LayoutDashboard },
@@ -106,6 +107,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <p className="text-sm font-medium text-zinc-200 truncate">Administrateur</p>
               <p className="text-xs text-zinc-500 truncate">Admin</p>
             </div>
+            <PushToggle />
             <button className="text-zinc-500 hover:text-white transition-colors p-1 rounded-md hover:bg-zinc-800">
               <Settings className="w-4 h-4" />
             </button>
@@ -198,6 +200,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <BarChart3 className="w-4 h-4 text-white" strokeWidth={2.5} />
             </div>
           </div>
+
+          <PushToggle />
         </header>
 
         {/* Background ambient glow */}
