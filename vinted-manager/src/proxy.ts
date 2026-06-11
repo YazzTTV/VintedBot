@@ -17,7 +17,9 @@ export function proxy(request: NextRequest) {
                      !path.startsWith('/api/comptabilite/balance') && 
                      !path.startsWith('/api/comptabilite/orders') && 
                      !path.startsWith('/api/comptabilite/capture') &&
-                     !path.startsWith('/api/extension/')
+                     !path.startsWith('/api/extension/') &&
+                     !path.startsWith('/api/tracking/sync')
+  
   
   const session = request.cookies.get('app_auth_session')?.value
 
