@@ -65,10 +65,10 @@ async def dismiss_popups(page):
     except Exception as e:
         print(f"[Scraper] Note popups : {e}")
 
-async def scrape_products(count: int, url: str, output_dir: str, archive_dir: str, niche: str = "garment", niche_def=None):
+async def scrape_products(count: int, url: str, output_dir: str, archive_dir: str, niche: str = "garment", niche_def=None, hidden: bool = False):
     os.makedirs(output_dir, exist_ok=True)
     
-    if not start_edge():
+    if not start_edge(headless=hidden):
         print("[Scraper] ERREUR : Impossible de lancer Edge.")
         return
 
@@ -349,8 +349,8 @@ async def scrape_products(count: int, url: str, output_dir: str, archive_dir: st
                         if url_img_clean in saved_urls:
                             continue
         
-                        # Filtrer les petits elements (icones, swatches de couleur, images d'aperçu de moins de 150px)
-                        if not box or box["width"] < 150 or box["height"] < 150:
+                        # Filtrer les petits elements (icones, swatches de couleur, images d'aperçu de moins de 100px)
+                        if not box or box["width"] < 100 or box["height"] < 100:
                             continue
                             
                         # Ignorer si ce n'est pas un serveur d'image Shein ou si c'est un logo / detail zoomé
@@ -453,6 +453,7 @@ if __name__ == "__main__":
     parser.add_argument("--account", type=str, default="nina", help="Nom du compte cible")
     parser.add_argument("--url", type=str, default="https://fr.shein.com/Women-Dresses-c-1727.html?tag_ids=quickship&price_max=15", help="URL Shein filtree de depart")
     parser.add_argument("--output-dir", type=str, default=None, help="Dossier force (defaut: Dossier du compte)")
+    parser.add_argument("--hidden", action="store_true", help="Lance Edge en arriere-plan (invisible)")
     
     args = parser.parse_args()
     
@@ -479,6 +480,7 @@ if __name__ == "__main__":
     print(f"Dossier de sortie : {final_output_dir}")
     print(f"Dossier archive   : {config.archive_dir}")
     print(f"Niche              : {config.niche.upper()} ({niche_def.display_name})")
+    print(f"Mode Invisible    : {args.hidden}")
     print("="*50 + "\n")
 
-    asyncio.run(scrape_products(args.count, start_url, final_output_dir, config.archive_dir, config.niche, niche_def=niche_def))
+    asyncio.run(scrape_products(args.count, start_url, final_output_dir, config.archive_dir, config.niche, niche_def=niche_def, hidden=args.hidden))

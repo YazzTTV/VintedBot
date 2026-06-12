@@ -40,15 +40,26 @@ def is_debugging_active() -> bool:
         return False
 
 
-def start_edge() -> bool:
+def start_edge(headless: bool = False) -> bool:
     if is_debugging_active():
         return True
-    print("[Edge] Demarrage du navigateur Edge (mode fantome)...")
+    print(f"[Edge] Demarrage du navigateur Edge (mode fantome, headless={headless})...")
     edge_path = EDGE_PATH_X86 if os.path.exists(EDGE_PATH_X86) else EDGE_PATH_X64
     if not os.path.exists(edge_path):
         print("[Edge] ERREUR : executable Edge introuvable.")
         return False
-    subprocess.Popen([edge_path, f"--user-data-dir={USER_DATA_DIR}", "--remote-debugging-port=9222"])
+        
+    cmd = [edge_path, f"--user-data-dir={USER_DATA_DIR}", "--remote-debugging-port=9222"]
+    
+    if headless:
+        # Replace --headless=new with off-screen positioning to bypass Cloudflare
+        cmd.append("--window-position=-32000,-32000")
+        cmd.append("--window-size=1920,1080")
+        cmd.append("--disable-backgrounding-occluded-windows")
+        cmd.append("--disable-renderer-backgrounding")
+        cmd.append("--disable-background-timer-throttling")
+        
+    subprocess.Popen(cmd)
     time.sleep(4)
     return True
 

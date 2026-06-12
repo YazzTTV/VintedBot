@@ -147,7 +147,7 @@ def list_available_accounts():
         return []
     
     # Comptes inactifs sur ce PC
-    ignored_accounts = {"emma", "margaux"}
+    ignored_accounts = {"emma", "margaux", "ninapython"}
     
     return [
         d for d in os.listdir(ACCOUNTS_ROOT) 

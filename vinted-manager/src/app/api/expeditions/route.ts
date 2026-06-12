@@ -9,9 +9,11 @@ const NOAH_WHATSAPP_NUMBER = '33783642205' // Numéro fourni par le client (+337
 export async function GET() {
   try {
     const pendingSales = await prisma.vente.findMany({
-      where: { statut: 'EN_ATTENTE' },
+      where: { statut: { in: ['EN_ATTENTE', 'A_EXPEDIER'] } },
       include: {
         botAccount: { select: { name: true } },
+        expedition: true,
+        parcel: true,
         article: {
           include: {
             commande: true,

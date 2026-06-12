@@ -182,13 +182,14 @@ def sync_to_vinted_manager_supabase():
         pass
 
 class ScreenshotHandler(FileSystemEventHandler):
-    def __init__(self, file_queue, config, publish=False, submit=False):
+    def __init__(self, file_queue, config, publish=False, submit=False, hidden=False):
         super().__init__()
         self.processed_files = set()
         self.file_queue = file_queue
         self.config = config
         self.publish = publish
         self.submit = submit
+        self.hidden = hidden
 
     def on_created(self, event):
         if event.is_directory:
@@ -310,7 +311,8 @@ class ScreenshotHandler(FileSystemEventHandler):
                     final_hanger_template,
                     product_dir,
                     prompt,
-                    niche_def=self.config.niche_def
+                    niche_def=self.config.niche_def,
+                    hidden=self.hidden
                 )
             )
             selfie_upscaled_path = image_results.get("selfie_upscaled")
@@ -324,13 +326,13 @@ class ScreenshotHandler(FileSystemEventHandler):
         finally:
             loop.close()
             
-        # Validation de la présence de toutes les images requises pour le type d'annonce
+        # Validation de la présence d'au moins une image générée pour le type d'annonce
         if is_stroller:
-            all_images_ok = (selfie_upscaled_path is not None) and (flat_lay_upscaled_path is not None)
-            required_desc = "selfie upscalé et flat lay upscalé"
+            all_images_ok = any([selfie_upscaled_path, flat_lay_upscaled_path])
+            required_desc = "au moins une image (selfie ou flat lay)"
         else:
-            all_images_ok = (selfie_upscaled_path is not None) and (profile_upscaled_path is not None) and (flat_lay_upscaled_path is not None) and (hanger_upscaled_path is not None) and (folded_upscaled_path is not None) and (selfie_hair_upscaled_path is not None)
-            required_desc = "6 images : selfie, profil, selfie_cheveux, flat lay, cintre et plié"
+            all_images_ok = any([selfie_upscaled_path, profile_upscaled_path, flat_lay_upscaled_path, hanger_upscaled_path, folded_upscaled_path, selfie_hair_upscaled_path])
+            required_desc = "au moins une image générée"
             
         # 4. Copie finale synchronisee vers la racine de OUTPUT_DIR pour declencher MacroDroid
         if all_images_ok:
@@ -367,10 +369,15 @@ class ScreenshotHandler(FileSystemEventHandler):
                     save_post_state(state_file, last_post_type="fake", last_fake_index=-1)
                     if self.publish:
                         try:
-                            from vinted_publisher import publish_listing
-                            # Publier directement depuis le dossier Fake_Ready local
-                            publish_listing(self.config.name, fake_ready_dir, auto_submit=self.submit)
-                        except Exception as pub_err:
+                            import subprocess
+                            import sys
+                            cmd = [sys.executable, "vinted_publisher.py", "--account", self.config.name, "--dir", fake_ready_dir]
+                            if self.submit:
+                                cmd.append("--submit")
+                            subprocess.run(cmd, check=True)
+                            print("[Watcher] [Alternance] Publication fake terminee, pause de 30s...")
+                            time.sleep(30)
+                        except subprocess.CalledProcessError as pub_err:
                             print(f"[Watcher] [ERROR] Echec de la publication auto du fake : {pub_err}")
                     countdown_wait(90)
             
@@ -397,9 +404,15 @@ class ScreenshotHandler(FileSystemEventHandler):
             
             if self.publish:
                 try:
-                    from vinted_publisher import publish_listing
-                    publish_listing(self.config.name, product_dir, auto_submit=self.submit)
-                except Exception as pub_err:
+                    import subprocess
+                    import sys
+                    cmd = [sys.executable, "vinted_publisher.py", "--account", self.config.name, "--dir", product_dir]
+                    if self.submit:
+                        cmd.append("--submit")
+                    subprocess.run(cmd, check=True)
+                    print("[Watcher] Publication IA terminee, pause de 30s pour soulager le reseau...")
+                    time.sleep(30)
+                except subprocess.CalledProcessError as pub_err:
                     print(f"[Watcher] [ERROR] Echec de la publication auto de l'IA : {pub_err}")
         else:
             print(f"[Watcher] [ERROR] Export annulé car des images requises sont manquantes ({required_desc}).")
@@ -415,7 +428,7 @@ class ScreenshotHandler(FileSystemEventHandler):
         print(f"\n[Watcher] [DONE] Traitement termine ! Annonce prete dans :\n   {product_dir}")
         print("-" * 50)
 
-def start_watcher(account_name="all", publish=False, submit=False):
+def start_watcher(account_name="all", publish=False, submit=False, hidden=False):
     from config_manager import list_available_accounts
     accounts = list_available_accounts() if account_name.lower() == "all" else [account_name]
     
@@ -430,9 +443,17 @@ def start_watcher(account_name="all", publish=False, submit=False):
     
     for acc in accounts:
         config = get_account_config(acc)
-        event_handler = ScreenshotHandler(file_queue, config, publish=publish, submit=submit)
+        event_handler = ScreenshotHandler(file_queue, config, publish=publish, submit=submit, hidden=hidden)
         observer.schedule(event_handler, config.input_dir, recursive=False)
         print(f"Dossier ecoute : {config.input_dir}", flush=True)
+        
+        # Traiter les images deja presentes (si deposees avant le demarrage du watcher)
+        for f in os.listdir(config.input_dir):
+            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.webp')):
+                file_path = os.path.join(config.input_dir, f)
+                event_handler.processed_files.add(file_path)
+                print(f"[Watcher] Image existante detectee sur le compte {config.name} (ajoutee a la file d'attente) : {f}", flush=True)
+                file_queue.put((file_path, event_handler))
         
     observer.start()
     
@@ -476,7 +497,8 @@ if __name__ == "__main__":
     parser.add_argument("--account", type=str, default="all", help="Nom du compte cible à surveiller (ou 'all' pour tous)")
     parser.add_argument("--publish", action="store_true", help="Publier automatiquement via Playwright CDP sur Vinted")
     parser.add_argument("--submit", action="store_true", help="Publier directement sans attendre de validation humaine")
+    parser.add_argument("--hidden", action="store_true", help="Lance Edge en arriere-plan pour la generation IA")
     
     args = parser.parse_args()
     
-    start_watcher(args.account, publish=args.publish, submit=args.submit)
+    start_watcher(args.account, publish=args.publish, submit=args.submit, hidden=args.hidden)

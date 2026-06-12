@@ -142,6 +142,12 @@ export async function POST(request: Request) {
                  if (metrics && metrics.sourcingUrl) {
                      resolvedSourcingUrl = metrics.sourcingUrl;
                      resolvedTitle = metrics.title || syncedOrder.title;
+                     
+                     // 🚀 FIX: Forcer la récupération du titre originel depuis le Sourcing
+                     const trueSourcing = await prisma.sourcingProduct.findUnique({ where: { url: resolvedSourcingUrl } });
+                     if (trueSourcing && trueSourcing.title) {
+                         resolvedTitle = trueSourcing.title;
+                     }
                  }
              }
              
@@ -243,6 +249,22 @@ export async function POST(request: Request) {
                 lienVente: syncedOrder.itemId ? `https://vinted.fr/items/${syncedOrder.itemId}` : null
               }
             })
+
+            // 🚀 FIX: Création Automatique de l'action ADD_TO_CART_SHEIN
+            if (isUrgence && sourcingUrlForUrgence && account.id && sourcingUrlForUrgence.toLowerCase().includes('shein')) {
+              await prisma.botActionQueue.create({
+                data: {
+                  botAccountId: account.id,
+                  actionType: 'ADD_TO_CART_SHEIN',
+                  status: 'PENDING',
+                  payload: {
+                    venteId: newVente.id,
+                    url: sourcingUrlForUrgence,
+                    taille: 'S' // Valeur par défaut pour l'auto-panier
+                  }
+                }
+              })
+            }
 
             // Notification push : nouvelle vente
             await sendPush({

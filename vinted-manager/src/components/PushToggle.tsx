@@ -66,7 +66,7 @@ export default function PushToggle() {
       const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY!
       const subscription = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(vapidKey),
+        applicationServerKey: urlBase64ToUint8Array(vapidKey) as any,
       })
 
       const sub = subscription.toJSON()

@@ -1,12 +1,20 @@
 import sys
 import subprocess
 import time
+import argparse
 from config_manager import list_available_accounts
 
 def main():
+    parser = argparse.ArgumentParser(description="Usine Vinted Globale")
+    parser.add_argument("--hidden", action="store_true", help="Lance le Scraper et le Generateur IA en arriere-plan (invisible)")
+    args = parser.parse_args()
+
     print("==================================================")
     print("      🚀 DÉMARRAGE DE L'USINE VINTED 100% PC      ")
     print("==================================================\n")
+
+    if args.hidden:
+        print("👻 MODE INVISIBLE ACTIVÉ (Scraper et IA en arrière-plan)")
 
     # 1. Récupération des comptes actifs
     accounts = list_available_accounts()
@@ -22,12 +30,12 @@ def main():
     for acc in accounts:
         print(f"\n>> Démarrage du Scraper pour le compte : {acc.upper()}")
         # On lance scraper.py en mode synchrone (on attend qu'il finisse avant de passer au compte suivant)
+        cmd = [sys.executable, "scraper.py", "--account", acc, "--count", "5"]
+        if args.hidden:
+            cmd.append("--hidden")
+            
         try:
-            subprocess.run([
-                sys.executable, "scraper.py", 
-                "--account", acc, 
-                "--count", "5"
-            ], check=True)
+            subprocess.run(cmd, check=True)
             print(f"✅ Scraping terminé pour {acc.upper()}.")
         except subprocess.CalledProcessError as e:
             print(f"❌ Erreur lors du scraping pour {acc.upper()} : {e}")
@@ -44,11 +52,11 @@ def main():
     
     try:
         # On lance watcher.py qui va dépiler tous les dossiers Input_Screenshots
-        subprocess.run([
-            sys.executable, "watcher.py", 
-            "--account", "all", 
-            "--publish", "--submit"
-        ])
+        cmd = [sys.executable, "watcher.py", "--account", "all", "--publish", "--submit"]
+        if args.hidden:
+            cmd.append("--hidden")
+            
+        subprocess.run(cmd)
     except KeyboardInterrupt:
         print("\nArrêt manuel du processus.")
     except Exception as e:

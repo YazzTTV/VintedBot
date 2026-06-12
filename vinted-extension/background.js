@@ -2167,7 +2167,7 @@ async function pollActionQueueFromManager() {
                     } else {
                         const actionResult = await executeBotAction(tabId, action);
                         
-                        if (action.actionType === "CHECK_EXTENSION_STATUS" && actionResult?.isAccepted) {
+                        if (action.actionType === "REQUEST_EXTENSION" && actionResult?.ok) {
                             const venteId = action.payload.venteId;
                             const managerUrlObj = new URL(activeBaseUrl);
                             const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
@@ -2408,16 +2408,19 @@ async function executeBotAction(tabId, action) {
                     const conv = cData.conversation || cData;
 
                     // Chercher un message système récent qui confirme le prolongement
-                    // Les mots clés : "délai" "prolongé", "accepté", "shipping_deadline"
+                    // Les mots clés : "délai" "prolongé", "accepté", "shipping_deadline", "prolongation"
                     let isAccepted = false;
                     for (const m of (conv.messages || [])) {
-                        if (m.type === "system_message" || m.is_system_message || m.action_type) {
-                            const text = (m.body || m.content || "").toLowerCase();
-                            if (text.includes("accept") && text.includes("prolong") || text.includes("délai")) {
+                        const isSystem = m.entity_type !== "message" && m.entity_type !== "Offer" && m.entity_type !== "OfferRequest";
+                        if (isSystem && m.entity) {
+                            const text = (m.entity.body || m.entity.title || m.entity.text || m.body || m.content || "").toLowerCase();
+                            
+                            // On vérifie si c'est le message de confirmation de l'extension de délai
+                            if ((text.includes("accept") && text.includes("prolong")) || text.includes("délai") || text.includes("prolongation") || text.includes("prolongé")) {
                                 isAccepted = true;
                                 break;
                             }
-                            if (m.action_type && m.action_type.includes("deadline") && m.action_type.includes("extend")) {
+                            if (m.entity.action_type && m.entity.action_type.includes("deadline") && m.entity.action_type.includes("extend")) {
                                 isAccepted = true;
                                 break;
                             }
@@ -2468,6 +2471,65 @@ async function executeBotAction(tabId, action) {
                     if (!publishRes.ok) {
                         const errTxt = await publishRes.text();
                         throw new Error(`Échec publication HTTP ${publishRes.status}: ${errTxt}`);
+                    }
+                    return { ok: true };
+                }
+
+                if (type === "REQUEST_EXTENSION") {
+                    const { vintedTransactionId, reasonKey = "5", reasonText = "Temps prévu familial", message } = pay;
+                    if (!vintedTransactionId) throw new Error("vintedTransactionId manquant");
+
+                    const txRes = await fetch(`/api/v2/transactions/${vintedTransactionId}`, {
+                        credentials: "include",
+                        headers: getHeaders(false)
+                    });
+                    if (!txRes.ok) throw new Error(`Impossible de lire la transaction ${vintedTransactionId}`);
+                    const txData = await txRes.json();
+                    
+                    const transaction = txData.transaction || txData;
+                    const shipmentId = transaction.shipment?.id;
+                    const conversationId = transaction.conversation_id;
+                    
+                    if (!shipmentId) throw new Error("shipmentId introuvable");
+
+                    // 1. Envoyer le message explicatif à l'acheteur
+                    if (conversationId && message) {
+                        try {
+                            await fetch(`/api/v2/conversations/${conversationId}/replies`, {
+                                method: "POST",
+                                credentials: "include",
+                                headers: getHeaders(true),
+                                body: JSON.stringify({
+                                    reply: {
+                                        body: message,
+                                        photo_temp_uuids: null,
+                                        is_personal_data_sharing_check_skipped: false
+                                    }
+                                })
+                            });
+                            console.log(`[REQUEST_EXTENSION] Message envoyé pour conv #${conversationId}`);
+                        } catch (err) {
+                            console.warn(`[REQUEST_EXTENSION] Echec envoi message : ${err.message}`);
+                        }
+
+                        // Attente de 10 secondes pour simuler un délai humain
+                        console.log(`[REQUEST_EXTENSION] Pause de 10s avant de lancer l'extension...`);
+                        await new Promise(resolve => setTimeout(resolve, 10000));
+                    }
+
+                    // 2. Demander la prolongation Vinted
+                    const extRes = await fetch(`/api/v2/shipments/${shipmentId}/deadline_extension`, {
+                        method: "POST",
+                        credentials: "include",
+                        headers: getHeaders(true),
+                        body: JSON.stringify({
+                            deadline_extension: { key: reasonKey, reason: reasonText }
+                        })
+                    });
+
+                    if (!extRes.ok) {
+                        const errTxt = await extRes.text();
+                        throw new Error(`Extension API Error (${extRes.status}): ${errTxt}`);
                     }
                     return { ok: true };
                 }
@@ -2601,7 +2663,11 @@ async function runGeminiScan(force = false) {
             const rawConvs = inboxRes.data.conversations || [];
             
             // 3. Plus de restriction (Fin du TARGET LOCK) : L'IA analyse maintenant toutes les conversations !
-            const targetConvs = rawConvs;
+            // 🚀 FIX: On filtre les messages système et l'équipe Vinted (@vinted)
+            const targetConvs = rawConvs.filter(c => {
+                if (c.other_user && (c.other_user.login === "vinted" || c.other_user.is_team)) return false;
+                return true;
+            });
             
             if (targetConvs.length === 0) {
                 console.log(`😴 [GEMINI] Aucune discussion active dans l'inbox.`);

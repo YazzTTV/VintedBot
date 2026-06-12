@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@higgsfield/client": "^0.2.1"
+  }
+}

@@ -33,9 +33,9 @@
     "react-hook-form": "^7.75.0",
     "recharts": "^3.8.1",
     "resend": "^6.12.3",
-    "web-push": "^3.6.7",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "web-push": "^3.6.7",
     "zod": "^4.4.3",
     "zustand": "^5.0.13"
   },
@@ -47,7 +47,7 @@
     "@types/node": "^20.19.41",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/web-push": "^3.3.4",
+    "@types/web-push": "^3.6.4",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
@@ -56,6 +56,6 @@
     "ts-jest": "^29.4.9",
     "tsx": "^4.21.0",
     "typescript": "^5",
-    "vercel": "^53.4.0"
+    "vercel": "^54.9.1"
   }
 }
