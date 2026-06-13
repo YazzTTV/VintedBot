@@ -183,7 +183,7 @@ export async function POST(request: Request) {
                      resolvedTitle = metrics.title || syncedOrder.title;
                      
                      // 🚀 FIX: Forcer la récupération du titre originel depuis le Sourcing
-                     const trueSourcing = await prisma.sourcingProduct.findUnique({ where: { url: resolvedSourcingUrl } });
+                     const trueSourcing = await prisma.sourcingProduct.findFirst({ where: { url: resolvedSourcingUrl } });
                      if (trueSourcing && trueSourcing.title) {
                          resolvedTitle = trueSourcing.title;
                      }

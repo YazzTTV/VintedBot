@@ -98,6 +98,55 @@ export async function POST(request: Request) {
           syncedAt: new Date()
         }
       })
+      
+      // --- NOUVEAU: Mettre à jour la Vente si elle était Inconnue ---
+      try {
+        let syncedOrders: any[] = [];
+        if (itemId) {
+            syncedOrders = await prisma.vintedOrderSynced.findMany({
+                where: { itemId: String(itemId), botAccountId: botAccount.id }
+            });
+        }
+        
+        // Match par titre si itemId échoue
+        if (syncedOrders.length === 0 && title && title !== "Discussion Vinted") {
+            const allOrders = await prisma.vintedOrderSynced.findMany({
+                where: { botAccountId: botAccount.id }
+            });
+            const cTitleLower = title.toLowerCase();
+            syncedOrders = allOrders.filter(o => {
+                if (!o.title) return false;
+                let baseTitle = o.title.trim();
+                if (baseTitle.endsWith('...')) baseTitle = baseTitle.slice(0, -3).trim();
+                const baseTitleLower = baseTitle.toLowerCase();
+                return cTitleLower.includes(baseTitleLower) || baseTitleLower.includes(cTitleLower);
+            });
+        }
+
+        if (buyerUsername) {
+            for (const syncedOrder of syncedOrders) {
+                if (syncedOrder.buyerLogin === "Acheteur Inconnu" || syncedOrder.buyerLogin === null || syncedOrder.buyerLogin === "Inconnu") {
+                    await prisma.vintedOrderSynced.update({
+                        where: { id: syncedOrder.id },
+                        data: { buyerLogin: buyerUsername }
+                    });
+                }
+                if (syncedOrder.articleId) {
+                    const vente = await prisma.vente.findUnique({ where: { articleId: syncedOrder.articleId } });
+                    if (vente && (vente.pseudoAcheteur === "Acheteur Inconnu" || vente.pseudoAcheteur === "Inconnu" || vente.pseudoAcheteur === null)) {
+                        await prisma.vente.update({
+                            where: { id: vente.id },
+                            data: { pseudoAcheteur: buyerUsername }
+                        });
+                        console.log(`✅ [REVERSE HEURISTIQUE] Vente ${vente.id} mise à jour avec l'acheteur ${buyerUsername} via Inbox Sync (Titre: ${syncedOrder.title}) !`);
+                    }
+                }
+            }
+        }
+      } catch (e) {
+          console.error("Erreur lors de la reverse heuristique:", e);
+      }
+
       // Notification push : nouvelle offre (transition false → true sur hasOffer)
       if (!!hasOffer && (prevConv === null || prevConv.hasOffer === false)) {
         await sendPush({
