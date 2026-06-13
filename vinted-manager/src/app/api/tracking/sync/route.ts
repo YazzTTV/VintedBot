@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { fuzzyMatch, normalizeUrl } from '@/lib/utils'
+import { fuzzyMatch, normalizeUrl, extractProductId } from '@/lib/utils'
 
 // POST /api/tracking/sync
 // Reçoit les données du shein_order_scraper.py
@@ -17,10 +17,10 @@ export async function POST(request: Request) {
     const sourcingProducts = await prisma.sourcingProduct.findMany()
 
     for (const order of orders) {
-      // On cherche les ventes en statut COMMANDE_A_FAIRE ou EN_ATTENTE qui matchent
+      // On cherche les ventes en statut COMMANDE_A_FAIRE, EN_ATTENTE ou A_EXPEDIER qui matchent
       const ventesPotentielles = await prisma.vente.findMany({
         where: {
-          statut: { in: ['COMMANDE_A_FAIRE', 'EN_ATTENTE'] },
+          statut: { in: ['COMMANDE_A_FAIRE', 'EN_ATTENTE', 'A_EXPEDIER'] },
           parcelId: null
         },
         include: { article: true }
@@ -38,10 +38,12 @@ export async function POST(request: Request) {
       }
 
       if (matchedSourcingUrl) {
-        const normalizedSourcingUrl = normalizeUrl(matchedSourcingUrl)
+        const spId = extractProductId(matchedSourcingUrl)
         const venteViaUrl = ventesPotentielles.find(v => {
           if (!v.article?.lienProduit) return false
-          return normalizeUrl(v.article.lienProduit) === normalizedSourcingUrl
+          const vId = extractProductId(v.article.lienProduit)
+          if (vId && spId && vId === spId) return true
+          return normalizeUrl(v.article.lienProduit) === normalizeUrl(matchedSourcingUrl)
         })
         if (venteViaUrl) {
           matchedVente = venteViaUrl
