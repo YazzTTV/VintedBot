@@ -77,13 +77,52 @@ export async function POST(request: Request) {
           }
         }
 
+        let finalBuyerLogin = order.buyerLogin;
+        
+        // --- NOUVEAU: Fallback heuristique pour deviner l'acheteur via l'inbox ---
+        if (!finalBuyerLogin || finalBuyerLogin === "Acheteur Inconnu") {
+          let conversations: any[] = [];
+          
+          if (order.itemId) {
+            conversations = await prisma.vintedConversation.findMany({
+              where: { itemId: String(order.itemId), botAccountId: account.id },
+              orderBy: { lastMessageTime: 'desc' }
+            });
+          }
+          
+          if (conversations.length === 0 && order.title) {
+            let baseTitle = order.title.trim();
+            if (baseTitle.endsWith('...')) baseTitle = baseTitle.slice(0, -3).trim();
+            const baseTitleLower = baseTitle.toLowerCase();
+            
+            const allConvs = await prisma.vintedConversation.findMany({
+              where: { botAccountId: account.id },
+              orderBy: { lastMessageTime: 'desc' }
+            });
+            
+            const matched = allConvs.filter(c => {
+               if (!c.title) return false;
+               const cTitleLower = c.title.toLowerCase();
+               return cTitleLower.includes(baseTitleLower) || baseTitleLower.includes(cTitleLower);
+            });
+            
+            if (matched.length > 0) conversations = matched;
+          }
+
+          if (conversations.length > 0) {
+            finalBuyerLogin = conversations[0].buyerUsername;
+            console.log(`💡 [HEURISTIQUE] Acheteur trouvé via inbox pour l'article ${order.title}: ${finalBuyerLogin}`);
+          }
+        }
+        // --------------------------------------------------------------------------
+
         const syncedOrder = await prisma.vintedOrderSynced.upsert({
           where: { id: orderId },
           update: {
             title: order.title || "Article Vinted",
             price: Number(order.price || 0),
             itemId: order.itemId ? String(order.itemId) : null,
-            buyerLogin: order.buyerLogin || null,
+            buyerLogin: finalBuyerLogin || null,
             buyerPhoto: order.buyerPhoto || null,
             photoUrl: order.photoUrl || null,
             status: order.status || "unknown",
@@ -97,7 +136,7 @@ export async function POST(request: Request) {
             title: order.title || "Article Vinted",
             price: Number(order.price || 0),
             itemId: order.itemId ? String(order.itemId) : null,
-            buyerLogin: order.buyerLogin || null,
+            buyerLogin: finalBuyerLogin || null,
             buyerPhoto: order.buyerPhoto || null,
             photoUrl: order.photoUrl || null,
             status: order.status || "unknown",
@@ -211,6 +250,50 @@ export async function POST(request: Request) {
                     notes: `Article dropshippé d'urgence pour @${syncedOrder.buyerLogin} (Vente: ${syncedOrder.title})`
                   }
                 })
+             } else {
+                isUrgence = true
+                sourcingUrlForUrgence = ""
+                const DEFAULT_USER_ID = '4700b998-a7e6-4c52-ac08-0e9893dba2ef'
+                
+                let panier = await prisma.commandeFournisseur.findFirst({
+                  where: {
+                    numero: 'URGENCE_INCONNU_DROPSHIPPING',
+                    statut: 'PANIER'
+                  }
+                });
+                
+                if (!panier) {
+                    panier = await prisma.commandeFournisseur.create({
+                      data: {
+                        userId: DEFAULT_USER_ID,
+                        numero: 'URGENCE_INCONNU_DROPSHIPPING',
+                        fournisseur: 'AUTRE',
+                        dateCommande: new Date(),
+                        prixTotal: 0,
+                        fraisPort: 0,
+                        nbArticles: 0,
+                        statut: 'PANIER',
+                        notes: `Panier automatique pour les articles dropshippés non identifiés.`
+                      }
+                    });
+                }
+                
+                await prisma.commandeFournisseur.update({
+                    where: { id: panier.id },
+                    data: { nbArticles: { increment: 1 } }
+                });
+
+                matchedArticle = await prisma.article.create({
+                  data: {
+                    commandeId: panier.id,
+                    nom: resolvedTitle,
+                    lienProduit: '',
+                    prixAchatUnitaire: 0,
+                    fraisPortUnitaires: 0,
+                    statut: 'VENDU',
+                    notes: `Article dropshippé d'urgence pour @${syncedOrder.buyerLogin} (Vente: ${syncedOrder.title}). L'URL source n'a pas pu être trouvée automatiquement.`
+                  }
+                })
              }
           }
 
@@ -231,13 +314,13 @@ export async function POST(request: Request) {
             // Si Urgence, le coût achat est 0 pour l'instant
             const coutTotalAchat = prixAchat + fraisPortAchat
             const beneficeNet = prixVente - coutTotalAchat - fraisVinted
-            const margePct = coutTotalAchat > 0 ? (beneficeNet / coutTotalAchat) * 100 : 100
+            const margePct = prixVente > 0 ? (beneficeNet / prixVente) * 100 : 0
 
             // 1. Créer la Vente
             const newVente = await prisma.vente.create({
               data: {
                 articleId: finalArticleId,
-                pseudoAcheteur: syncedOrder.buyerLogin || "Inconnu",
+                pseudoAcheteur: finalBuyerLogin || "Inconnu",
                 prixVente: prixVente,
                 fraisVinted: fraisVinted,
                 beneficeNet: beneficeNet,
@@ -310,6 +393,16 @@ export async function POST(request: Request) {
             console.log(`✅ [AUTO-RECONCILIATION] Vente créée pour l'article: ${matchedArticle.nom} (Urgence: ${isUrgence})`)
           } else {
              console.log(`⚠️ [AUTO-RECONCILIATION] ÉCHEC TOTAL: Aucun article STOCK, TRANSIT ou SOURCING trouvé pour: "${syncedOrder.title}"`)
+          }
+        } else if (syncedOrder.articleId && finalBuyerLogin && finalBuyerLogin !== "Acheteur Inconnu") {
+          // Mise à jour rétroactive d'une vente existante si l'acheteur était Inconnu
+          const existingVente = await prisma.vente.findUnique({ where: { articleId: syncedOrder.articleId } });
+          if (existingVente && (existingVente.pseudoAcheteur === "Inconnu" || existingVente.pseudoAcheteur === "Acheteur Inconnu" || existingVente.pseudoAcheteur === null)) {
+              await prisma.vente.update({
+                  where: { id: existingVente.id },
+                  data: { pseudoAcheteur: finalBuyerLogin }
+              });
+              console.log(`✅ [UPDATE VENTE] Acheteur mis à jour rétroactivement pour vente ${existingVente.id} -> ${finalBuyerLogin}`);
           }
         }
         
