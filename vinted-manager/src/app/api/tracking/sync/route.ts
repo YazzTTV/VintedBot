@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { fuzzyMatch } from '@/lib/utils'
+import { fuzzyMatch, normalizeUrl } from '@/lib/utils'
 
 // POST /api/tracking/sync
 // Reçoit les données du shein_order_scraper.py
@@ -14,9 +14,10 @@ export async function POST(request: Request) {
     }
 
     let linkedCount = 0
+    const sourcingProducts = await prisma.sourcingProduct.findMany()
 
     for (const order of orders) {
-      // On cherche les ventes en statut COMMANDE_A_FAIRE ou EN_ATTENTE qui matchent le titre
+      // On cherche les ventes en statut COMMANDE_A_FAIRE ou EN_ATTENTE qui matchent
       const ventesPotentielles = await prisma.vente.findMany({
         where: {
           statut: { in: ['COMMANDE_A_FAIRE', 'EN_ATTENTE'] },
@@ -25,12 +26,35 @@ export async function POST(request: Request) {
         include: { article: true }
       })
 
-      // Simple fuzzy match sur le titre
       let matchedVente = null
-      for (const vente of ventesPotentielles) {
-        if (vente.article?.nom && fuzzyMatch(order.title, vente.article.nom)) {
-          matchedVente = vente
+
+      // 1. Chercher dans SourcingProduct pour avoir le lienProduit (c'est le titre original Shein)
+      let matchedSourcingUrl = null
+      for (const sp of sourcingProducts) {
+        if (sp.title && fuzzyMatch(order.title, sp.title)) {
+          matchedSourcingUrl = sp.url
           break
+        }
+      }
+
+      if (matchedSourcingUrl) {
+        const normalizedSourcingUrl = normalizeUrl(matchedSourcingUrl)
+        const venteViaUrl = ventesPotentielles.find(v => {
+          if (!v.article?.lienProduit) return false
+          return normalizeUrl(v.article.lienProduit) === normalizedSourcingUrl
+        })
+        if (venteViaUrl) {
+          matchedVente = venteViaUrl
+        }
+      }
+
+      // 2. Fallback : Si non trouvé via Sourcing, essayer de matcher le titre Vinted (au cas où)
+      if (!matchedVente) {
+        for (const vente of ventesPotentielles) {
+          if (vente.article?.nom && fuzzyMatch(order.title, vente.article.nom)) {
+            matchedVente = vente
+            break
+          }
         }
       }
 
@@ -55,7 +79,8 @@ export async function POST(request: Request) {
           where: { id: matchedVente.id },
           data: {
             parcelId: parcel.id,
-            statut: 'EN_ATTENTE' // Prêt pour l'expédition finale
+            statut: 'EN_ATTENTE', // Prêt pour l'expédition finale
+            spvState: 'SUIVI_EN_COURS' // NOUVEAU : Met à jour le suivi post-vente
           }
         })
         
