@@ -27,13 +27,17 @@ export async function POST(request: Request) {
       })
 
       let matchedVente = null
+      
+      // 1. Chercher par le lien du produit directement si le scraper a pu l'extraire
+      let matchedSourcingUrl = order.productUrl || null
 
-      // 1. Chercher dans SourcingProduct pour avoir le lienProduit (c'est le titre original Shein)
-      let matchedSourcingUrl = null
-      for (const sp of sourcingProducts) {
-        if (sp.title && fuzzyMatch(order.title, sp.title)) {
-          matchedSourcingUrl = sp.url
-          break
+      // Fallback : Chercher dans SourcingProduct pour avoir le lienProduit via le titre Shein
+      if (!matchedSourcingUrl) {
+        for (const sp of sourcingProducts) {
+          if (sp.title && fuzzyMatch(order.title, sp.title)) {
+            matchedSourcingUrl = sp.url
+            break
+          }
         }
       }
 
