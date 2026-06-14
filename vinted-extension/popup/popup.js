@@ -471,4 +471,29 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
     }
+
+    // --- TERMINAL LOGS ---
+    const logTerminal = document.getElementById('log-terminal');
+    if (logTerminal) {
+        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            if (request.action === "terminalLog") {
+                // Enlever le texte "En attente d'actions..." au premier log
+                if (logTerminal.children.length === 1 && logTerminal.children[0].textContent.includes("En attente")) {
+                    logTerminal.innerHTML = '';
+                }
+                const entry = document.createElement('div');
+                
+                // Color coding simple
+                if (request.msg.includes("✅")) entry.style.color = "#4ade80";
+                else if (request.msg.includes("❌") || request.msg.includes("Erreur")) entry.style.color = "#f87171";
+                else if (request.msg.includes("🔥") || request.msg.includes("🛒")) entry.style.color = "#facc15";
+                else if (request.msg.includes("💸")) entry.style.color = "#60a5fa";
+                
+                entry.textContent = `[${new Date().toLocaleTimeString()}] ${request.msg}`;
+                logTerminal.appendChild(entry);
+                logTerminal.scrollTop = logTerminal.scrollHeight;
+            }
+        });
+    }
+
 });

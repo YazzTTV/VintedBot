@@ -15,6 +15,12 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.set({ botActive: false, activityLog: [] });
 });
 
+// --- GESTION DES LOGS TERMINAL ---
+function terminalLog(msg) {
+    console.log(msg); // fallback classique
+    chrome.runtime.sendMessage({ action: "terminalLog", msg: msg }).catch(() => {});
+}
+
 // --- GESTION DES SYNCHRONISATIONS ET COOLDOWNS ---
 const syncState = {
     lastBalanceSync: {}, // Format: { botId: timestamp }
@@ -138,6 +144,80 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
+    // PONT REST API : Envoyer un message invisible
+    if (request.action === "sendMessageREST") {
+        sendMessageREST(request.conversationId, request.text)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    // PONT REST API : Envoyer une offre invisible
+    if (request.action === "sendOfferREST") {
+        sendOfferREST(request.itemId, request.price)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    // --- PONT REST API : POST-VENTE & LITIGES ---
+    if (request.action === "markAsShippedREST") {
+        markAsShippedREST(request.transactionId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "markAsDeliveredREST") {
+        markAsDeliveredREST(request.shipmentId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "completeTransactionREST") {
+        completeTransactionREST(request.transactionId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "cancelTransactionREST") {
+        cancelTransactionREST(request.transactionId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "downloadLabelREST") {
+        downloadLabelREST(request.transactionId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "openDisputeREST") {
+        openDisputeREST(request.transactionId, request.reasonId, request.description)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "resolveDisputeREST") {
+        resolveDisputeREST(request.complaintId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    // --- PONT REST API : ENGAGEMENT ---
+    if (request.action === "likeItemREST") {
+        likeItemREST(request.itemId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+    if (request.action === "followUserREST") {
+        followUserREST(request.userId)
+            .then(res => sendResponse(res))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
     if (request.action === "getBotStatus") {
         chrome.storage.local.get(['botActive'], (result) => {
             sendResponse({ status: result.botActive });
@@ -183,8 +263,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "checkNotifications") {
-        console.log("🚀 [GHOST V4] Déclenchement manuel");
-        runGhostScan(true);
+        console.log("🕵️ [GHOST V4] Déclenchement manuel");
+        fetchNotificationsAPI(true);
         sendResponse({ success: true });
         return true;
     }
@@ -195,6 +275,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
         return true;
     }
+
 
     if (request.action === "downloadImage") {
         fetch(request.url)
@@ -424,6 +505,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // Étape 3 : Synchroniser l'Inbox (Nouveau)
             try {
                 await syncVintedInboxToManager();
+                await fetchNotificationsAPI(true); // Notifications rétroactives
                 successCount++;
             } catch (err) {
                 console.error("⚠️ [SYNC] Échec étape Inbox :", err.message);
@@ -601,8 +683,9 @@ async function handleSheinCart(url, taille, venteId) {
         chrome.tabs.create({ url, active: true }, (tab) => resolve(tab));
     });
 
-    // 2. Attendre un peu que le DOM de base soit là
-    await new Promise(r => setTimeout(r, 2000));
+    // 2. Attendre que la page et le Javascript (Vue/React) soient totalement chargés (Hydratation)
+    // 6 secondes au lieu de 2 pour éviter de cliquer dans le vide avant que les boutons soient actifs
+    await new Promise(r => setTimeout(r, 6000));
 
     // 3. Boucle de Polling depuis le Background
     let attempts = 0;
@@ -616,7 +699,7 @@ async function handleSheinCart(url, taille, venteId) {
                 const results = await chrome.scripting.executeScript({
                     target: { tabId: newTab.id },
                     world: "MAIN", // CRITIQUE : S'exécuter dans le contexte principal pour que Vue/React accepte les clics !
-                    func: (targetTaille) => {
+                    func: async (targetTaille) => {
                         try {
                             const closeBtns = document.querySelectorAll('.c-coupon-box .she-close, .cookie-banner .close-btn');
                             closeBtns.forEach(btn => btn.click());
@@ -670,16 +753,60 @@ async function handleSheinCart(url, taille, venteId) {
                                     });
                             }
                             
+                            // --- Extraction du prix d'achat ---
+                            let extractedPrice = null;
+                            try {
+                                // Stratégie 1: Balise Meta cachée (très fiable)
+                                const metaPrice = document.querySelector('meta[property="og:price:amount"]');
+                                if (metaPrice && metaPrice.content) {
+                                    extractedPrice = parseFloat(metaPrice.content);
+                                }
+                                
+                                // Stratégie 2: Sélecteurs visuels
+                                if (!extractedPrice || isNaN(extractedPrice)) {
+                                    const priceSelectors = ['.product-intro__head-mainprice .discount', '.product-intro__head-mainprice', '.original-price', '.price', 'h2.product-intro__head-price span'];
+                                    let priceText = "";
+                                    for(let sel of priceSelectors) {
+                                        const el = document.querySelector(sel);
+                                        if(el && (el.textContent.includes('€') || el.textContent.includes('EUR'))) {
+                                            priceText = el.textContent;
+                                            break;
+                                        }
+                                    }
+                                    if (priceText) {
+                                        const match = priceText.match(/[\d,.]+/);
+                                        if (match) {
+                                            extractedPrice = parseFloat(match[0].replace(',', '.'));
+                                        }
+                                    }
+                                }
+                                
+                                // Stratégie 3: Recherche brute dans tout le HTML (Regex)
+                                if (!extractedPrice || isNaN(extractedPrice)) {
+                                    const bodyText = document.body.innerText;
+                                    const matchEuro = bodyText.match(/(?:Dès\s*)?(\d+[,.]\d{2})\s*€/);
+                                    if (matchEuro) {
+                                        extractedPrice = parseFloat(matchEuro[1].replace(',', '.'));
+                                    }
+                                }
+                            } catch (e) {
+                                console.error("Erreur extraction prix:", e);
+                            }
+
                             if (addBtn) {
                                 window.__botSizeClicked = false;
+                                
+                                // FIX: Attendre 2 secondes avant de cliquer sur 'Ajouter au panier'
+                                // Cela laisse le temps à Shein de charger les variantes de tailles !
+                                await new Promise(r => setTimeout(r, 2000));
                                 
                                 // Clic simplissime direct
                                 addBtn.click();
                                 
-                                return { success: true, sizeFound: sizeClicked, state: "CLICKED" };
+                                return { success: true, sizeFound: sizeClicked, state: "CLICKED", price: extractedPrice };
                             }
                             
-                            return { success: false, state: "WAITING", sizeFound: sizeClicked };
+                            return { success: false, state: "WAITING", sizeFound: sizeClicked, price: extractedPrice };
                         } catch (err) {
                             return { success: false, error: err.message };
                         }
@@ -871,10 +998,15 @@ async function pollVintedApiRoutine() {
 }
 
 // === LIKES / NOTIFICATIONS API (Remplace le Ghost Scan) ===
-async function fetchNotificationsAPI() {
+async function fetchNotificationsAPI(isManual = false) {
+    if (!isManual) {
+        const res = await new Promise(resolve => chrome.storage.local.get(['botActive'], resolve));
+        if (!res.botActive) return;
+    }
+
     // Anti-doublon / Verrou
     const now = Date.now();
-    const cooldownMs = 25000; // Ne pas fetcher plus d'une fois toutes les 25s
+    const cooldownMs = isManual ? 0 : 25000; // Pas de cooldown si manuel
     if (now - syncState.lastGhostScan < cooldownMs) return;
     syncState.lastGhostScan = now;
 
@@ -888,15 +1020,16 @@ async function fetchNotificationsAPI() {
     if (!userRes || !userRes.success) return;
 
     // Injection du fetch API dans l'onglet Vinted (Same-Origin)
+    const limit = isManual ? 50 : 20;
     const results = await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        func: async () => {
+        func: async (limitPerPage) => {
             try {
                 const csrfMeta = document.querySelector('meta[name="csrf-token"]');
                 const headers = { "Accept": "application/json", "X-Money-Object": "true" };
                 if (csrfMeta) headers["X-CSRF-Token"] = csrfMeta.content;
 
-                const apiUrl = `https://api.${window.location.hostname}/inbox-notifications/v1/notifications?page=1&per_page=20`;
+                const apiUrl = `https://api.${window.location.hostname}/inbox-notifications/v1/notifications?page=1&per_page=${limitPerPage}`;
                 const res = await fetch(apiUrl, { credentials: "include", headers });
                 if (!res.ok) return { error: `HTTP ${res.status}` };
                 const data = await res.json();
@@ -910,7 +1043,8 @@ async function fetchNotificationsAPI() {
             } catch (e) {
                 return { error: e.message };
             }
-        }
+        },
+        args: [limit]
     });
 
     const notifsData = results && results[0] ? results[0].result : null;
@@ -954,7 +1088,7 @@ async function fetchNotificationsAPI() {
     chrome.storage.local.get(['contactedUsers'], async (result) => {
         const contacted = result.contactedUsers || [];
         let dmSentCount = 0;
-        const MAX_DM_PER_SCAN = 2; // Reduced from 3 to look more human
+        const MAX_DM_PER_SCAN = isManual ? 10 : 2; // 10 en manuel pour la rétroactivité, 2 en routine
 
             for (const notif of notifsData.notifications) {
                 // Types Vinted pour likes : ancien format (ItemFavorited) ou nouveau format API (entry_type 20)
@@ -1094,15 +1228,41 @@ async function fetchNotificationsAPI() {
                                 }
 
                                 // 2. Envoyer le message
-                                const msgBody = "Bonjour ! 😊 J'ai vu que cet article vous plaisait. N'hésitez pas si vous avez des questions ou si vous souhaitez faire une offre !";
-                                await fetch(`/api/v2/conversations/${convId}/replies`, {
+                                const msgBody = `Hello ! Merci pour ton intérêt pour mon article 😊. Je fais un petit tri dans mon dressing, du coup je te propose de te le laisser pour un peu moins cher. Si ça te tente, n'hésite pas, l'envoi sera rapide ! Belle journée`;
+                                await fetch(`/api/v2/conversations/${convId}/messages`, {
                                     method: "POST",
                                     credentials: "include",
                                     headers: headers,
                                     body: JSON.stringify({
-                                        reply: { body: msgBody }
+                                        message: { content: msgBody }
                                     })
                                 });
+
+                                // 3. Faire une offre après le message (Récupération du prix actuel via l'API, puis réduction de 10€)
+                                try {
+                                    const itemRes = await fetch(`/api/v2/items/${itemId}`, { credentials: "include", headers });
+                                    if (itemRes.ok) {
+                                        const itemData = await itemRes.json();
+                                        const originalPrice = parseFloat(itemData.item.price.amount || itemData.item.price);
+                                        let offerPrice = originalPrice - 10;
+                                        if (offerPrice < 1) offerPrice = 1;
+                                        
+                                        // On attend un peu entre le message et l'offre
+                                        await new Promise(r => setTimeout(r, 1000));
+                                        
+                                        await fetch(`/api/v2/items/${itemId}/bargains`, {
+                                            method: "POST",
+                                            credentials: "include",
+                                            headers: headers,
+                                            body: JSON.stringify({
+                                                bargain: { price: String(offerPrice) }
+                                            })
+                                        });
+                                    }
+                                } catch (offerError) {
+                                    console.warn("Impossible d'envoyer l'offre API :", offerError);
+                                }
+
                                 return { success: true };
                             }
                             return { error: "No convId" };
@@ -1354,7 +1514,7 @@ async function syncAccountBalanceToManager(force = false) {
                     console.log(`📡 [SYNC] Tentative vers ${url}...`);
                     
                     const controller = new AbortController();
-                    const timeoutId = setTimeout(() => controller.abort(), 4000); // Timeout rapide de 4s
+                    const timeoutId = setTimeout(() => controller.abort(), 15000); // Timeout étendu à 15s pour supporter les requêtes de likes
                     
                     const res = await fetch(url, {
                         method: "POST",
@@ -1407,6 +1567,7 @@ async function syncAccountBalanceToManager(force = false) {
  */
 async function syncVintedOrdersToManager() {
     console.log("📦 [SYNC ORDERS] Lancement de la synchronisation des ventes réelles...");
+    terminalLog("Synchronisation des ventes...");
     try {
         // 1. Trouver l'onglet Vinted actif
         const optimalTab = await getOptimalVintedTab();
@@ -1449,7 +1610,29 @@ async function syncVintedOrdersToManager() {
                     const r = await fetch(url, { credentials: "include", headers });
                     if (!r.ok) throw new Error(`HTTP ${r.status}`);
                     const data = await r.json();
-                    return data.my_orders || data.orders || [];
+                    let orders = data.my_orders || data.orders || [];
+                    
+                    // Récupération individuelle du nom de l'acheteur s'il est masqué par défaut
+                    for (let o of orders) {
+                        const b = o.buyer || o.user || o.other_user;
+                        if (!b || (!b.login && !b.name)) {
+                            try {
+                                const tid = o.transaction_id || o.id;
+                                if (tid) {
+                                    const tRes = await fetch(`/api/v2/transactions/${tid}`, { credentials: "include", headers });
+                                    if (tRes.ok) {
+                                        const tData = await tRes.json();
+                                        const t = tData.transaction || tData;
+                                        if (t.buyer) o.buyer = t.buyer;
+                                        else if (t.user) o.user = t.user;
+                                    }
+                                }
+                            } catch (e) {}
+                            await new Promise(res => setTimeout(res, 200));
+                        }
+                    }
+                    
+                    return orders;
                 } catch (e) {
                     throw new Error(`Échec fetch Vinted : ${e.message}`);
                 }
@@ -1462,6 +1645,7 @@ async function syncVintedOrdersToManager() {
         }
 
         console.log(`📦 [SYNC ORDERS] Aspiration réussie : ${rawOrders.length} ventes trouvées. Cartographie...`);
+        terminalLog(`✅ ${rawOrders.length} vente(s) détectée(s)...`);
 
         // 4. Cartographie vers le modèle propre du Manager
         const mappedOrders = rawOrders.map(o => {
@@ -1539,7 +1723,7 @@ async function syncVintedOrdersToManager() {
             try {
                 console.log(`📡 [SYNC ORDERS] Tentative vers ${url}...`);
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 4000);
+                const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s pour supporter la recherche des transactions manquantes
 
                 const res = await fetch(url, {
                     method: "POST",
@@ -1553,6 +1737,11 @@ async function syncVintedOrdersToManager() {
                 if (res.ok) {
                     success = true;
                     console.log(`✅ [SYNC ORDERS] Succès complet vers ${url} !`);
+                    terminalLog(`✅ ${mappedOrders.length} vente(s) synchronisée(s) au système.`);
+                    // Lancer la file d'attente immédiatement pour l'auto-panier
+                    setTimeout(() => {
+                        pollActionQueueFromManager();
+                    }, 1000);
                     break;
                 } else {
                     const errTxt = await res.text();
@@ -1827,7 +2016,7 @@ const cachedTime = cache[idStr];
         console.log(`💬 [SYNC INBOX] POST vers ${syncUrl} (${mappedConversations.length} convs)...`);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
         
         const res = await fetch(syncUrl, {
             method: "POST",
@@ -1866,6 +2055,7 @@ const cachedTime = cache[idStr];
  */
 async function syncVintedItemMetricsToManager() {
     console.log("🔥 [SYNC METRICS] Lancement de l'analyse du Dressing...");
+    terminalLog("Synchronisation du dressing...");
     try {
         const optimalTab = await getOptimalVintedTab();
 
@@ -2078,6 +2268,7 @@ async function pollActionQueueFromManager() {
         if (!userRes || !userRes.success) return;
 
         const botName = userRes.username;
+        const botId = userRes.id;
 
         // Construire la cascade d'URLs pour le GET
         const configuredUrl = await getManagerApiUrl();
@@ -2161,9 +2352,47 @@ async function pollActionQueueFromManager() {
                         console.log(`✅ [MARKET SPY] ${spyResult.liked} articles likés`);
                         success = true;
                     } else if (action.actionType === "ADD_TO_CART_SHEIN") {
-                        await handleSheinCart(action.payload.url, action.payload.taille, action.payload.venteId);
+                        terminalLog("🛒 Initialisation de l'ajout au panier automatique...");
+                        const cartResult = await handleSheinCart(action.payload.url, action.payload.taille, action.payload.venteId);
                         console.log(`✅ [SHEIN CART] Ajout réussi.`);
-                        success = true;
+                        
+                        if (cartResult && action.payload.venteId) {
+                            try {
+                                const managerUrlObj = new URL(activeBaseUrl);
+                                const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
+                                
+                                const payload: any = { spvState: 'PANIER' };
+                                if (cartResult.price) payload.prixAchatUnitaire = cartResult.price;
+
+                                const res = await fetch(`${managerRootUrl}/api/ventes/${action.payload.venteId}`, {
+                                    method: "PATCH",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify(payload)
+                                });
+                                
+                                if (!res.ok) {
+                                    throw new Error(`HTTP error! status: ${res.status}`);
+                                }
+                                
+                                if (cartResult.price) {
+                                    terminalLog(`💸 Ajout du produit au panier et récupération du prix d'achat (${cartResult.price}€). SPV mis à jour (PANIER).`);
+                                    console.log(`💸 [SHEIN CART] Prix d'achat ${cartResult.price}€ et état PANIER remontés au Manager pour la vente ${action.payload.venteId}.`);
+                                } else {
+                                    terminalLog(`✅ Ajout du produit au panier. SPV mis à jour (PANIER).`);
+                                }
+                                success = true;
+                            } catch (e) {
+                                terminalLog(`❌ Erreur lors de la remontée de l'état/prix au Manager.`);
+                                console.error("Erreur lors de la remontée au Manager:", e);
+                                success = false;
+                            }
+                        } else if (cartResult && cartResult.error) {
+                            terminalLog(`❌ Erreur sur Shein: ${cartResult.error}`);
+                            success = false;
+                        } else {
+                            terminalLog(`✅ Ajout du produit au panier effectué.`);
+                            success = true;
+                        }
                     } else {
                         const actionResult = await executeBotAction(tabId, action);
                         

@@ -688,3 +688,138 @@ async function duplicateItemREST(itemId, options = {}) {
         isDraft: false
     };
 }
+
+/**
+ * 📩 Envoie un message texte via l'API REST de Vinted (Invisible)
+ */
+async function sendMessageREST(conversationId, text) {
+    console.log(`📩 Envoi du message API à la conversation #${conversationId}...`);
+    const payload = {
+        message: {
+            content: text
+        }
+    };
+    
+    const res = await vintedFetch(`/api/v2/conversations/${conversationId}/messages`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.success) {
+        console.error("❌ Échec envoi message :", res);
+        throw new Error(`Erreur envoi message (HTTP ${res.status})`);
+    }
+
+    console.log(`✅ Message envoyé avec succès !`);
+    return { success: true, data: res.data };
+}
+
+/**
+ * 🤝 Envoie une offre de prix via l'API REST de Vinted (Invisible)
+ */
+async function sendOfferREST(itemId, price) {
+    console.log(`🤝 Envoi de l'offre de ${price}€ pour l'article #${itemId} via API...`);
+    const payload = {
+        bargain: {
+            price: String(price)
+        }
+    };
+    
+    let res = await vintedFetch(`/api/v2/items/${itemId}/bargains`, {
+        method: "POST",
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.success) {
+        console.warn(`⚠️ Échec de l'offre sur /items/${itemId}/bargains (HTTP ${res.status}). Tentative alternative...`);
+        // Tentative sur l'endpoint conversation si le premier échoue
+        // On suppose que l'ID passé peut aussi être utilisé comme conversationId dans certains contextes, 
+        // ou que l'API Vinted a changé.
+        throw new Error(`Erreur envoi offre (HTTP ${res.status})`);
+    }
+
+    console.log(`✅ Offre de ${price}€ envoyée avec succès !`);
+    return { success: true, data: res.data };
+}
+
+// ==========================================
+// 📦 MODULE POST-VENTE (Gestion des Commandes)
+// ==========================================
+
+async function markAsShippedREST(transactionId) {
+    console.log(`📦 Marquage de la transaction #${transactionId} comme expédiée...`);
+    const res = await vintedFetch(`/api/v2/transactions/${transactionId}/shipment/mark_as_shipped`, { method: "PUT" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+async function markAsDeliveredREST(shipmentId) {
+    console.log(`📦 Marquage de l'expédition #${shipmentId} comme livrée...`);
+    const res = await vintedFetch(`/api/v2/shipments/${shipmentId}/mark_as_delivered`, { method: "PUT" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+async function completeTransactionREST(transactionId) {
+    console.log(`✅ Clôture de la transaction #${transactionId}...`);
+    const res = await vintedFetch(`/api/v2/transactions/${transactionId}/complete`, { method: "PUT" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+async function cancelTransactionREST(transactionId) {
+    console.log(`🚫 Annulation de la transaction #${transactionId}...`);
+    const res = await vintedFetch(`/api/v2/transactions/${transactionId}/cancel`, { method: "PUT" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+async function downloadLabelREST(transactionId) {
+    console.log(`🖨️ Téléchargement du bordereau pour la transaction #${transactionId}...`);
+    const res = await vintedFetch(`/api/v2/transactions/${transactionId}/shipment/digital_label`, { method: "GET" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, url: res.data?.url || res.data };
+}
+
+// ==========================================
+// ⚖️ MODULE LITIGES (SAV)
+// ==========================================
+
+async function openDisputeREST(transactionId, reasonId, description = "") {
+    console.log(`⚠️ Ouverture d'un litige pour la transaction #${transactionId}...`);
+    const payload = {
+        complaint: {
+            transaction_id: transactionId,
+            reason_id: reasonId,
+            description: description
+        }
+    };
+    const res = await vintedFetch(`/api/v2/complaints`, { method: "POST", body: JSON.stringify(payload) });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+async function resolveDisputeREST(complaintId) {
+    console.log(`🕊️ Résolution du litige #${complaintId}...`);
+    const res = await vintedFetch(`/api/v2/complaints/${complaintId}/resolve`, { method: "POST" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+// ==========================================
+// ❤️ MODULE ENGAGEMENT (Likes & Follows)
+// ==========================================
+
+async function likeItemREST(itemId) {
+    console.log(`❤️ Like silencieux de l'article #${itemId}...`);
+    const res = await vintedFetch(`/api/v2/items/${itemId}/favorites`, { method: "POST" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
+
+async function followUserREST(userId) {
+    console.log(`👤 Follow silencieux de l'utilisateur #${userId}...`);
+    const res = await vintedFetch(`/api/v2/users/${userId}/followers`, { method: "POST" });
+    if (!res.success) throw new Error(`HTTP ${res.status}`);
+    return { success: true, data: res.data };
+}
