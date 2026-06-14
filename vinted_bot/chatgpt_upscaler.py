@@ -4,6 +4,14 @@ import time
 import random
 import asyncio
 from playwright.async_api import async_playwright
+
+GLOBAL_RATE_LIMIT_EVENT = asyncio.Event()
+GLOBAL_RATE_LIMIT_EVENT.set()
+
+async def _unlock_rate_limit(seconds):
+    await asyncio.sleep(seconds)
+    print("\n[RATE LIMIT] Fin de la pause de 15 minutes. Reprise des generations ChatGPT.")
+    GLOBAL_RATE_LIMIT_EVENT.set()
 from edge_browser import start_edge, CDP_URL
 from PIL import Image
 from humanizer import humanize_image
@@ -237,8 +245,9 @@ async def wait_for_chatgpt_image_async(page, timeout: int = 300):
             error_msg1 = await page.get_by_text("Vous envoyez trop de requêtes", exact=False).is_visible()
             error_msg2 = await page.get_by_text("Too many requests", exact=False).is_visible()
             if error_msg1 or error_msg2:
-                print("\n[RATE LIMIT] ChatGPT a bloqué la génération (Trop de requêtes). Pause de 15 minutes...")
-                await asyncio.sleep(900)  # 15 minutes
+                print("\n[RATE LIMIT] ChatGPT a bloque la generation (Trop de requetes). Pause de 15 minutes globale...")
+                GLOBAL_RATE_LIMIT_EVENT.clear()
+                asyncio.create_task(_unlock_rate_limit(900))
                 return None
         except:
             pass
@@ -261,6 +270,7 @@ async def wait_for_chatgpt_image_async(page, timeout: int = 300):
     return None
 
 async def task_generate_selfie(context, input_image_path, avatar_path, output_path, prompt_anglais, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Selfie"):
@@ -341,6 +351,7 @@ async def task_generate_selfie(context, input_image_path, avatar_path, output_pa
     return False
 
 async def task_generate_flat_lay(context, input_image_path, template_path, output_path, prompt_anglais, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Flat Lay"):
@@ -399,6 +410,7 @@ async def task_generate_flat_lay(context, input_image_path, template_path, outpu
     return False
 
 async def task_generate_hanger(context, original_image_path, hanger_template_path, output_path, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Hanger"):
@@ -446,6 +458,7 @@ async def task_generate_hanger(context, original_image_path, hanger_template_pat
     return False
 
 async def task_generate_profile(context, input_path, output_path, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Profile"):
@@ -508,6 +521,7 @@ async def task_generate_profile(context, input_path, output_path, lock=None):
     return False
 
 async def task_generate_stroller_domestic(context, input_image_path, output_path, prompt_anglais, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Stroller Domestic"):
@@ -565,6 +579,7 @@ async def task_generate_stroller_domestic(context, input_image_path, output_path
     return False
 
 async def task_generate_stroller_with_dog(context, input_image_path, output_path, prompt_anglais, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Stroller Dog"):
@@ -630,6 +645,7 @@ async def task_generate_stroller_with_dog(context, input_image_path, output_path
     return False
 
 async def task_generate_folded(context, input_image_path, template_path, output_path, prompt_anglais, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Folded"):
@@ -686,6 +702,7 @@ async def task_generate_folded(context, input_image_path, template_path, output_
     return False
 
 async def task_generate_selfie_hand_in_hair(context, input_path, output_path, lock=None):
+    await GLOBAL_RATE_LIMIT_EVENT.wait()
     page = await context.new_page()
     try:
         if not await _prepare_chatgpt_page(page, "Selfie Hair"):
@@ -794,7 +811,7 @@ async def generate_all_images_parallel_async(
         results = {v: None for v in niche_def.output_images.values()}
         # S'assurer que les cles canoniques legacy existent aussi pour la retrocompat publisher
         for legacy_key in ("selfie_upscaled", "flat_lay_upscaled", "profile_upscaled",
-                           "hanger_upscaled", "folded_upscaled", "selfie_hand_in_hair_upscaled"):
+                           "hanger_upscaled", "folded_upscaled"):
             if legacy_key not in results:
                 results[legacy_key] = None
         recipe = niche_def.image_recipe
@@ -806,8 +823,7 @@ async def generate_all_images_parallel_async(
             "flat_lay_upscaled": None,
             "profile_upscaled": None,
             "hanger_upscaled": None,
-            "folded_upscaled": None,
-            "selfie_hand_in_hair_upscaled": None
+            "folded_upscaled": None
         }
         recipe = None
         output_map = {}
@@ -855,7 +871,6 @@ async def generate_all_images_parallel_async(
 
                     profile_path = os.path.join(product_dir, "profile_upscaled.jpg")
                     folded_path = os.path.join(product_dir, "folded_upscaled.jpg")
-                    selfie_hair_path = os.path.join(product_dir, "selfie_hand_in_hair_upscaled.jpg")
 
                     print("[ChatGPT Parallel] [Legacy] Lancement du deuxième batch (Profil, Plié)...")
                     if res1:
@@ -867,13 +882,11 @@ async def generate_all_images_parallel_async(
                         tasks_batch_2 = [dummy_task()]
 
                     tasks_batch_2.append(task_generate_folded(context, file_path, floor_template_path, folded_path, prompt, dalle_lock))
-                    res4, res5, res6 = await asyncio.gather(*tasks_batch_2)
+                    res4, res5 = await asyncio.gather(*tasks_batch_2)
 
                     if res1 and res4:
                         results["profile_upscaled"] = profile_path
-                    if res1 and res5:
-                        results["selfie_hand_in_hair_upscaled"] = selfie_hair_path
-                    if res6:
+                    if res5:
                         results["folded_upscaled"] = folded_path
 
             else:
@@ -882,7 +895,7 @@ async def generate_all_images_parallel_async(
                 # => batch 1 : toutes sauf les deux dependantes
                 # => batch 2 : les dependantes si selfie reussi
 
-                SELFIE_DEPENDENT = {"profile", "selfie_hand_in_hair"}
+                SELFIE_DEPENDENT = {"profile"}
 
                 batch1_keys = [k for k in recipe if k not in SELFIE_DEPENDENT]
                 batch2_keys = [k for k in recipe if k in SELFIE_DEPENDENT]

@@ -1029,7 +1029,8 @@ async function fetchNotificationsAPI(isManual = false) {
                 const headers = { "Accept": "application/json", "X-Money-Object": "true" };
                 if (csrfMeta) headers["X-CSRF-Token"] = csrfMeta.content;
 
-                const apiUrl = `https://api.${window.location.hostname}/inbox-notifications/v1/notifications?page=1&per_page=${limitPerPage}`;
+                const hostName = window.location.hostname.replace(/^www\./, '');
+                const apiUrl = `https://api.${hostName}/inbox-notifications/v1/notifications?page=1&per_page=${limitPerPage}`;
                 const res = await fetch(apiUrl, { credentials: "include", headers });
                 if (!res.ok) return { error: `HTTP ${res.status}` };
                 const data = await res.json();
@@ -1120,14 +1121,15 @@ async function fetchNotificationsAPI(isManual = false) {
                     }
                 } else {
                     // Ancien format (/api/v2/notifications)
-                    username = notif.user ? notif.user.login : (notif.bundle && notif.bundle.user ? notif.bundle.user.login : null);
+                    username = notif.user ? notif.user.login : null;
                     itemId = notif.item ? notif.item.id : (notif.subject && notif.subject.id ? notif.subject.id : null);
                     userId = notif.user ? notif.user.id : (notif.bundle && notif.bundle.user ? notif.bundle.user.id : null);
                 }
                 
                 if (!username || !itemId) continue;
                 
-                if (contacted.includes(username)) continue;
+                const contactKey = `${username}_${itemId}`;
+                if (contacted.includes(contactKey)) continue;
 
                 if (dmSentCount >= MAX_DM_PER_SCAN) {
                     console.log(`🛑 [API SCAN] Limite de DM atteinte, on verra les autres au prochain cycle.`);
@@ -1206,10 +1208,22 @@ async function fetchNotificationsAPI(isManual = false) {
                                     headers: { "Accept": "application/json", "X-Money-Object": "true" }
                                 });
                                 
+                                let extractedPrice = null;
+                                let convDetailsKeys = "";
+                                let transactionId = null;
                                 if (detailRes.ok) {
                                     const detailData = await detailRes.json();
                                     const convDetails = detailData.conversation || detailData;
+                                    convDetailsKeys = Object.keys(convDetails).join(",");
+                                    if (convDetails.transaction) {
+                                        transactionId = convDetails.transaction.id;
+                                    }
                                     const messages = convDetails.messages || [];
+                                    
+                                    // Extraction anticipée du prix depuis la conversation
+                                    if (convDetails.item && convDetails.item.price) {
+                                        extractedPrice = parseFloat(convDetails.item.price.amount || convDetails.item.price);
+                                    }
                                     
                                     let alreadyMessaged = false;
                                     for (const m of messages) {
@@ -1229,38 +1243,75 @@ async function fetchNotificationsAPI(isManual = false) {
 
                                 // 2. Envoyer le message
                                 const msgBody = `Hello ! Merci pour ton intérêt pour mon article 😊. Je fais un petit tri dans mon dressing, du coup je te propose de te le laisser pour un peu moins cher. Si ça te tente, n'hésite pas, l'envoi sera rapide ! Belle journée`;
-                                await fetch(`/api/v2/conversations/${convId}/messages`, {
+                                const msgRes = await fetch(`/api/v2/conversations/${convId}/replies`, {
                                     method: "POST",
                                     credentials: "include",
                                     headers: headers,
                                     body: JSON.stringify({
-                                        message: { content: msgBody }
+                                        reply: { body: msgBody }
                                     })
                                 });
 
-                                // 3. Faire une offre après le message (Récupération du prix actuel via l'API, puis réduction de 10€)
+                                if (!msgRes.ok) {
+                                    let errText = "";
+                                    try { errText = await msgRes.text(); } catch(e){}
+                                    return { error: `HTTP ${msgRes.status} sur message: ${errText.substring(0, 100)}` };
+                                }
+
+                                // 3. Faire une offre après le message
                                 try {
-                                    const itemRes = await fetch(`/api/v2/items/${itemId}`, { credentials: "include", headers });
-                                    if (itemRes.ok) {
-                                        const itemData = await itemRes.json();
-                                        const originalPrice = parseFloat(itemData.item.price.amount || itemData.item.price);
-                                        let offerPrice = originalPrice - 10;
-                                        if (offerPrice < 1) offerPrice = 1;
-                                        
-                                        // On attend un peu entre le message et l'offre
-                                        await new Promise(r => setTimeout(r, 1000));
-                                        
-                                        await fetch(`/api/v2/items/${itemId}/bargains`, {
-                                            method: "POST",
-                                            credentials: "include",
-                                            headers: headers,
-                                            body: JSON.stringify({
-                                                bargain: { price: String(offerPrice) }
-                                            })
-                                        });
+                                    let originalPrice = extractedPrice;
+                                    if (!originalPrice || isNaN(originalPrice)) {
+                                        let itemRes = await fetch(`/api/v2/item_upload/items/${itemId}`, { credentials: "include", headers });
+                                        if (!itemRes.ok) {
+                                            itemRes = await fetch(`/api/v2/items/${itemId}`, { credentials: "include", headers });
+                                        }
+                                        if (itemRes.ok) {
+                                            const itemData = await itemRes.json();
+                                            const itemObj = itemData.item || itemData;
+                                            originalPrice = parseFloat(itemObj.price?.amount || itemObj.price);
+                                        }
+                                    }
+                                    
+                                    if (!originalPrice || isNaN(originalPrice)) {
+                                        return { success: true, offerError: `Prix introuvable. Clés conv: ${convDetailsKeys}` };
+                                    }
+                                    
+                                    let offerPrice = originalPrice - 10;
+                                    if (offerPrice < 1) offerPrice = 1;
+                                    
+                                    if (!transactionId) {
+                                        return { success: true, offerError: `Transaction introuvable dans la conv.` };
+                                    }
+                                    
+                                    await new Promise(r => setTimeout(r, 1000));
+                                    
+                                    let offerRes = await fetch(`/api/v2/transactions/${transactionId}/offers`, {
+                                        method: "POST",
+                                        credentials: "include",
+                                        headers: headers,
+                                        body: JSON.stringify({ 
+                                            offer: { 
+                                                price: String(offerPrice), 
+                                                currency: "EUR" 
+                                            }
+                                        })
+                                    });
+                                    
+                                    const offerText = await offerRes.text();
+                                    let hasError = !offerRes.ok;
+                                    try {
+                                        const offerJson = JSON.parse(offerText);
+                                        if (offerJson.error || offerJson.code && !offerJson.offer) {
+                                            hasError = true;
+                                        }
+                                    } catch (e) {}
+                                    
+                                    if (hasError) {
+                                        return { success: true, offerError: `Offre API: HTTP ${offerRes.status} - ${offerText.substring(0, 100)}` };
                                     }
                                 } catch (offerError) {
-                                    console.warn("Impossible d'envoyer l'offre API :", offerError);
+                                    return { success: true, offerError: `Exception: ${offerError.message}` };
                                 }
 
                                 return { success: true };
@@ -1278,22 +1329,25 @@ async function fetchNotificationsAPI(isManual = false) {
                 if (res && res.skipped) {
                     console.log(`⏭️ [API SCAN] Rattrapage : ${username} a déjà été contacté. Ignoré.`);
                 } else if (res && !res.error) {
-                    console.log(`⭐ [API SCAN] NOUVEAU like API de ${username} → Envoi DM invisible`);
-                    saveLog(`⭐ DM (API) envoyé à ${username}`);
+                    console.log(`⭐ [API SCAN] NOUVEAU like API de ${username} sur item #${itemId} → Envoi DM invisible`);
+                    if (res.offerError) {
+                        saveLog(`⭐ DM envoyé à ${username} (❌ Offre: ${res.offerError})`);
+                    } else {
+                        saveLog(`⭐ DM + Offre envoyés à ${username}`);
+                    }
                     dmSentCount++;
                 } else if (res && res.error) {
-                    console.error(`❌ [API SCAN] Erreur DM pour ${username} :`, res.error);
+                    console.error(`❌ [API SCAN] Erreur DM pour ${username} sur item #${itemId}:`, res.error);
                     saveLog(`❌ Erreur DM ${username} : ${res.error.substring(0, 50)}`);
                 }
 
-                contacted.push(username);
+                contacted.push(contactKey);
+                chrome.storage.local.set({ contactedUsers: contacted.slice(-300) });
                 
                 // Délai aléatoire (8 à 15 secondes) entre deux DM pour faire très naturel
                 const humanDelay = 8000 + Math.random() * 7000;
                 await new Promise(r => setTimeout(r, humanDelay));
             }
-
-        chrome.storage.local.set({ contactedUsers: contacted.slice(-300) });
     });
 }
 
@@ -2361,7 +2415,7 @@ async function pollActionQueueFromManager() {
                                 const managerUrlObj = new URL(activeBaseUrl);
                                 const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
                                 
-                                const payload: any = { spvState: 'PANIER' };
+                                const payload = { spvState: 'PANIER' };
                                 if (cartResult.price) payload.prixAchatUnitaire = cartResult.price;
 
                                 const res = await fetch(`${managerRootUrl}/api/ventes/${action.payload.venteId}`, {
@@ -2870,8 +2924,8 @@ async function runGeminiScan(force = false) {
             // 1. Détection dynamique de l'identité Vendeur active (Nina, Margaux, Léna...)
             const identity = await fetchUserIdentityDirect(optimalTab.id);
             if (!identity || !identity.success) {
-                console.warn("⚠️ [GEMINI] Impossible de déterminer l'identité du bot.");
-                saveLog("⚠️ IA : Identité bot inconnue.");
+                console.warn(`⚠️ [GEMINI] Impossible de déterminer l'identité du bot: ${identity.error}`);
+                saveLog(`⚠️ IA : Identité bot inconnue (${identity.error || 'Erreur inconnue'}).`);
                 return;
             }
             

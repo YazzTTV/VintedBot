@@ -16,9 +16,10 @@ def _restart_brave(cdp_port: int, profile: str) -> None:
     print(f"[Publisher] Redémarrage de Brave (port {cdp_port}, profil {profile})...")
     # Kill existing Brave processes that use this CDP port
     try:
-        # taskkill on all brave.exe — aggressive but necessary when CDP freezes
+        # Tuer uniquement l'instance Brave qui ecoute sur ce port CDP
+        cmd_kill = f"Get-WmiObject Win32_Process | Where-Object {{ $_.Name -eq 'brave.exe' -and $_.CommandLine -match '--remote-debugging-port={cdp_port}' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
         subprocess.run(
-            ["taskkill", "/F", "/IM", "brave.exe"],
+            ["powershell", "-Command", cmd_kill],
             capture_output=True, timeout=10
         )
     except Exception:

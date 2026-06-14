@@ -12,15 +12,13 @@
     "flat_lay",
     "hanger",
     "profile",
-    "folded",
-    "selfie_hand_in_hair"
+    "folded"
   ],
   "output_images": {
     "selfie": "selfie_upscaled.jpg",
     "flat_lay": "flat_lay_upscaled.jpg",
     "hanger": "hanger_upscaled.jpg",
     "profile": "profile_upscaled.jpg",
-    "folded": "folded_upscaled.jpg",
-    "selfie_hand_in_hair": "selfie_hand_in_hair_upscaled.jpg"
+    "folded": "folded_upscaled.jpg"
   }
 }

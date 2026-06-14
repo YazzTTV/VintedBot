@@ -695,12 +695,12 @@ async function duplicateItemREST(itemId, options = {}) {
 async function sendMessageREST(conversationId, text) {
     console.log(`📩 Envoi du message API à la conversation #${conversationId}...`);
     const payload = {
-        message: {
-            content: text
+        reply: {
+            body: text
         }
     };
     
-    const res = await vintedFetch(`/api/v2/conversations/${conversationId}/messages`, {
+    const res = await vintedFetch(`/api/v2/conversations/${conversationId}/replies`, {
         method: "POST",
         body: JSON.stringify(payload)
     });

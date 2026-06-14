@@ -71,138 +71,183 @@ def scrape_shein_orders():
             extracted_data = []
             
             import re
+            import urllib.parse
             
-            # Chercher tous les en-têtes contenant le numéro de commande
-            # Souvent encapsulé dans une balise <span> ou <div>
-            order_headers = page.locator(r'text=/(?:Numéro de commande|Order number)\s*[A-Z0-9]+/i').all()
+            # Scroll vers le bas pour forcer le lazy-loading des anciennes commandes
+            print("[SheinScraper] Défilement de la page pour charger toutes les commandes...")
+            for _ in range(4):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(2)
             
-            print(f"[SheinScraper] {len(order_headers)} en-têtes de commande potentiels trouvés.")
+            # Trouver tous les éléments contenant "Suivre"
+            # On cherche de manière large, puis on filtrera
+            all_suivre = page.locator('text="Suivre"').all()
             
-            # Récupérer toutes les URL de suivi d'un coup avec une logique ascendante (bottom-up) robuste
-            # On cherche tous les boutons "Suivre", puis on remonte leur arbre DOM jusqu'à trouver le numéro de commande.
-            tracking_urls_map = page.evaluate("""() => {
-                let results = {};
-                let btns = Array.from(document.querySelectorAll('a, button, div[role="button"]'))
-                    .filter(b => {
-                        let text = b.innerText ? b.innerText.toLowerCase() : '';
-                        return text.includes('suivre') || text.includes('follow') || text.includes('suivi');
-                    });
+            valid_btns = []
+            for el in all_suivre:
+                # Exclure les liens de FAQ "Comment suivre ma commande"
+                href = el.get_attribute("href")
+                if href and "How-to-track-my-order" in href:
+                    continue
                     
-                for (let btn of btns) {
-                    let parent = btn.parentElement;
-                    let orderNum = null;
-                    let title = "Article";
-                    while(parent && parent.tagName !== 'BODY') {
-                        let text = parent.innerText || "";
-                        let match = text.match(/(?:Num\\u00e9ro de commande|Order number)\\s*([A-Z0-9]+)/i);
-                        if (match) {
-                            orderNum = match[1];
-                            let nameEl = parent.querySelector('[class*="name"], [class*="title"]');
-                            if (nameEl) {
-                                title = nameEl.innerText.trim();
-                            } else {
-                                let aTags = parent.querySelectorAll('a');
-                                for(let a of aTags) {
-                                    if(a.innerText && a.innerText.length > 15 && !a.innerText.toLowerCase().includes('suivre')) {
-                                        title = a.innerText.trim();
-                                        break;
-                                    }
+                # Vérifier que c'est un bouton ou un lien cliquable
+                tag_name = el.evaluate("el => el.tagName").lower()
+                role = el.get_attribute("role")
+                if tag_name in ['a', 'button'] or role == 'button':
+                    valid_btns.append(el)
+            
+            print(f"[SheinScraper] {len(valid_btns)} boutons 'Suivre' valides trouvés.")
+            
+            for i, btn in enumerate(valid_btns):
+                print(f"\n[SheinScraper] Traitement de la commande {i+1}/{len(valid_btns)}...")
+                try:
+                    # Extraction du titre, URL et prix via JS (robuste car remonte le DOM)
+                    data_js = btn.evaluate('''el => {
+                        let root = el.closest('.order-item') || el.closest('li') || el.closest('tr') || el.closest('.goods');
+                        if (!root) return {title: "Article Shein", url: null, price: null, productId: null};
+                        
+                        let title = "Article Shein";
+                        let url = null;
+                        let price = null;
+                        let productId = null;
+                        
+                        // Extraction du prix
+                        let priceEl = root.querySelector('.default-price') || root.querySelector('.goods-price') || root.querySelector('.price');
+                        if (priceEl) {
+                            let priceText = priceEl.innerText.trim();
+                            priceText = priceText.replace('€', '').replace(',', '.').replace(' ', '').trim();
+                            price = parseFloat(priceText);
+                            if (isNaN(price)) price = null;
+                        }
+                        
+                        // Récupération de l'URL et du Product ID d'abord (Matching plus robuste)
+                        let links = Array.from(root.querySelectorAll('a'));
+                        let productLink = links.find(a => a.href && a.href.includes('-p-'));
+                        if (productLink) {
+                            url = productLink.href;
+                            let match = url.match(/-p-(\d+)/);
+                            if (match) productId = match[1];
+                        }
+                        
+                        // Stratégie 1 : l'attribut alt de l'image du produit contient toujours le titre complet
+                        let imgs = Array.from(root.querySelectorAll('img[alt]'));
+                        let productImg = imgs.find(img => img.alt && img.alt.length > 10 && !img.alt.includes('logo'));
+                        if (productImg) {
+                            title = productImg.alt.trim();
+                            // Trouver le lien
+                            if (!url) {
+                                let parentA = productImg.closest('a');
+                                if (parentA && parentA.href) {
+                                    url = parentA.href;
+                                    let match = url.match(/-p-(\d+)/);
+                                    if (match) productId = match[1];
                                 }
                             }
-                            break;
                         }
-                        parent = parent.parentElement;
-                    }
-                    
-                    let a = btn.tagName === 'A' ? btn : btn.closest('a');
-                    if (!a) {
-                        let parentA = btn.parentElement ? btn.parentElement.closest('a') : null;
-                        if (parentA) a = parentA;
-                    }
-                    
-                    let url = a ? a.href : (btn.href || btn.getAttribute('data-href') || null);
-                    if (orderNum && url && !url.includes('javascript:')) {
-                        if (!results[orderNum]) {
-                            results[orderNum] = { url: url, title: title };
+                        
+                        // Stratégie 2 : Fallback texte
+                        if (title === "Article Shein") {
+                            let textContent = root.innerText || "";
+                            textContent = textContent.replace(/\\u200B/g, ''); // Retire les zero-width spaces
+                            
+                            let lines = textContent.split('\\n').map(l => l.trim()).filter(l => l.length > 15 && !l.toLowerCase().includes('suivre') && !l.toLowerCase().includes('trouver mon') && !l.toLowerCase().includes('expédié') && !l.toLowerCase().includes('commande') && !l.toLowerCase().includes('retour'));
+                            lines.sort((a, b) => b.length - a.length);
+                            if (lines.length > 0) title = lines[0];
                         }
-                    }
-                }
-                return results;
-            }""")
-
-            for header in order_headers:
-                try:
-                    header_text = header.inner_text()
-                    match_order = re.search(r'(?:Numéro de commande|Order number)\s*([A-Z0-9]+)', header_text, re.IGNORECASE)
-                    if not match_order:
+                        
+                        return {title: title, url: url, price: price, productId: productId};
+                    }''')
+                    
+                    title = data_js.get("title", "Article Shein")
+                    product_url = data_js.get("url", None)
+                    product_price = data_js.get("price", None)
+                    product_id = data_js.get("productId", None)
+                    safe_title = title.encode('cp1252', 'replace').decode('cp1252')
+                    print(f" -> Titre identifié : {safe_title[:50]}")
+                    if product_price is not None:
+                        print(f" -> Prix achat extrait : {product_price}€")
+                    print(f" -> Clic sur 'Suivre'...")
+                    
+                    # On s'assure que le bouton est visible avant de cliquer
+                    btn.scroll_into_view_if_needed()
+                    time.sleep(1)
+                    
+                    with context.expect_page(timeout=15000) as new_page_info:
+                        btn.click()
+                    
+                    track_page = new_page_info.value
+                    track_page.wait_for_load_state("domcontentloaded")
+                    time.sleep(3)
+                    
+                    url = track_page.url
+                    print(f" -> Nouvelle page ouverte : {url}")
+                    
+                    # Extraire le numéro de commande de l'URL (billno=...)
+                    parsed = urllib.parse.urlparse(url)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    order_num = qs.get("billno", [None])[0]
+                    
+                    if not order_num:
+                        print(" -> Impossible de trouver le numéro de commande dans l'URL. Ignoré.")
+                        track_page.close()
                         continue
                         
-                    order_num = match_order.group(1)
-                    print(f"\n[SheinScraper] Traitement commande : {order_num}")
+                    print(f" -> Commande identifiée : {order_num}")
                     
-                    tracking_info = tracking_urls_map.get(order_num)
+                    # Extraire le transporteur et numéro de suivi
+                    body_text = track_page.locator('body').inner_text()
+                    regex = r'(colissimo|mondial relay|dpd|chronopost|gls|bpost|cainiao|relais colis)[\s:\-]*([A-Z0-9]{8,25})'
+                    match_track = re.search(regex, body_text, re.IGNORECASE)
                     
-                    if not tracking_info:
-                        print(" -> Bouton 'Suivre' introuvable ou URL invalide.")
-                        continue
-                        
-                    tracking_url = tracking_info["url"]
-                    item_title = tracking_info["title"]
-                    
-                    print(f" -> Suivi détecté : {tracking_url}")
-                    # Création d'un nouvel onglet pour la page de suivi
-                    track_page = context.new_page()
-                    tracking_num = ""
                     carrier = "Inconnu"
+                    tracking_num = ""
                     
-                    try:
-                        if tracking_url:
-                            track_page.goto(tracking_url, timeout=30000)
-                        else:
-                            # Fallback risqué : Clic avec Control pour forcer le nouvel onglet
-                            with context.expect_page(timeout=10000) as new_page_info:
-                                suivre_btn.click(modifiers=["Control"])
-                            track_page.close()
-                            track_page = new_page_info.value
-                            
-                        try:
-                            track_page.wait_for_load_state("domcontentloaded", timeout=15000)
-                            track_page.wait_for_selector('text="Copier"', timeout=10000)
-                        except Exception:
-                            pass
-                        track_page.wait_for_timeout(1000)
-                        
-                        # Extraire le numéro de suivi (Recherche Regex globale sur le texte de la page)
-                        # C'est la méthode la plus robuste car la structure HTML change souvent.
-                        body_text = track_page.locator('body').inner_text()
-                        
-                        # Liste des transporteurs possibles
-                        regex = r'(colissimo|mondial relay|dpd|chronopost|gls|bpost|cainiao|relais colis)\s*([A-Z0-9]{8,25})'
-                        match_track = re.search(regex, body_text, re.IGNORECASE)
-                        
-                        if match_track:
-                            carrier = match_track.group(1).strip()
-                            tracking_num = match_track.group(2).strip()
-                        else:
-                            # Tentative alternative de trouver juste une chaîne qui ressemble à un suivi classique à côté de "Copier"
-                            copier_el = track_page.locator('text="Copier"').first
-                            if copier_el.is_visible(timeout=2000):
-                                parent_text = copier_el.locator('xpath=..').inner_text()
-                                match_alt = re.search(r'([A-Z0-9]{8,25})', parent_text)
-                                if match_alt:
-                                    tracking_num = match_alt.group(1).strip()
+                    if match_track:
+                        carrier = match_track.group(1).strip()
+                        tracking_num = match_track.group(2).strip()
+                    else:
+                        copier_el = track_page.locator('text="Copier"').first
+                        if copier_el.is_visible(timeout=2000):
+                            parent_text = copier_el.locator('xpath=..').inner_text()
+                            match_alt = re.search(r'([A-Z0-9]{8,25})', parent_text)
+                            if match_alt:
+                                tracking_num = match_alt.group(1).strip()
                                 
-                    except Exception as e:
-                        print(f" -> Erreur lors du chargement de la page de suivi : {e}")
-                    finally:
-                        if not track_page.is_closed():
-                            track_page.close()
+                    track_page.close()
+                    
+                    if not product_url and order_num:
+                        print(f" -> Récupération de l'URL produit via les détails...")
+                        detail_url = f"https://fr.shein.com/user/orders/detail/{order_num}"
+                        detail_page = context.new_page()
+                        try:
+                            detail_page.goto(detail_url)
+                            detail_page.wait_for_load_state("domcontentloaded", timeout=10000)
+                            detail_page.wait_for_timeout(2000)
+                            product_url = detail_page.evaluate('''() => {
+                                let links = Array.from(document.querySelectorAll('a')).map(a => a.href);
+                                let pLink = links.find(href => href && href.includes('-p-') && href.includes('.html'));
+                                return pLink || null;
+                            }''')
+                        except Exception as e:
+                            print(f" -> Erreur lors de la récupération du détail: {e}")
+                        finally:
+                            detail_page.close()
                             
+                    if product_url:
+                        print(f" -> Lien Produit  : {product_url.split('?')[0]}")
+                        if not product_id:
+                            pid_match = re.search(r'-p-(\d+)', product_url)
+                            if pid_match:
+                                product_id = pid_match.group(1)
+                    
                     if tracking_num:
                         print(f" -> Succès : Transporteur={carrier}, Suivi={tracking_num}")
                         extracted_data.append({
                             "orderNumber": order_num,
-                            "title": item_title,
+                            "title": title,  # Titre exact récupéré !
+                            "productUrl": product_url,
+                            "productId": product_id,
+                            "price": product_price,
                             "trackingNumber": tracking_num,
                             "carrier": carrier
                         })
@@ -210,20 +255,41 @@ def scrape_shein_orders():
                         print(" -> Aucun numéro de suivi extrait.")
                         
                 except Exception as e:
-                    print(f" -> Erreur générale sur cette commande : {e}")
+                    print(f" -> Erreur lors du traitement du bouton : {e}")
             
             print(f"\n[SheinScraper] Bilan : {len(extracted_data)} numéros de suivi extraits.")
             
             if extracted_data:
+                payload = {"orders": extracted_data}
                 try:
                     print(f"[SheinScraper] Envoi des données vers le Vinted Manager ({API_SYNC_URL})")
-                    res = requests.post(API_SYNC_URL, json={"orders": extracted_data})
-                    if res.status_code == 200:
-                        print("[SheinScraper] ✔️ Synchronisation réussie !")
-                    else:
-                        print(f"[SheinScraper] ❌ Échec API : {res.status_code}")
+                    import json
+                    success = False
+                    for attempt in range(3):
+                        try:
+                            res = requests.post(API_SYNC_URL, json=payload, timeout=15)
+                            if res.status_code == 200:
+                                print("[SheinScraper] [SUCCES] Synchronisation reussie !")
+                                success = True
+                                break
+                            else:
+                                print(f"[SheinScraper] [ECHEC] API a retourne : {res.status_code} - {res.text}")
+                        except Exception as e:
+                            print(f"[SheinScraper] [ERREUR] Tentative {attempt+1}/3 échouée : {e}")
+                        
+                        if attempt < 2:
+                            time.sleep(3)
+                            
+                    if not success:
+                        print(f"[SheinScraper] [ERREUR FATALE] Impossible de synchroniser après 3 tentatives. Sauvegarde locale...")
+                        try:
+                            with open("failed_payload.json", "w", encoding="utf-8") as f:
+                                json.dump(payload, f, ensure_ascii=False, indent=2)
+                            print("[SheinScraper] Données sauvegardées dans failed_payload.json")
+                        except Exception as e:
+                            print(f"[SheinScraper] Erreur lors de la sauvegarde locale : {e}")
                 except Exception as e:
-                    print(f"[SheinScraper] ❌ Erreur réseau lors de la synchronisation : {e}")
+                    print(f"[SheinScraper] [ERREUR] Erreur inattendue : {e}")
             
             page.close()
         except Exception as e:

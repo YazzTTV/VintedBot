@@ -7,6 +7,7 @@ from config_manager import list_available_accounts
 def main():
     parser = argparse.ArgumentParser(description="Usine Vinted Globale")
     parser.add_argument("--hidden", action="store_true", help="Lance le Scraper et le Generateur IA en arriere-plan (invisible)")
+    parser.add_argument("--account", type=str, help="Cible un compte specifique (ex: lena, orane)", default=None)
     args = parser.parse_args()
 
     print("==================================================")
@@ -17,7 +18,11 @@ def main():
         print("👻 MODE INVISIBLE ACTIVÉ (Scraper et IA en arrière-plan)")
 
     # 1. Récupération des comptes actifs
-    accounts = list_available_accounts()
+    if args.account:
+        accounts = [args.account.lower()]
+    else:
+        accounts = list_available_accounts()
+        
     if not accounts:
         print("❌ Aucun compte actif trouvé dans la configuration.")
         return
@@ -52,11 +57,15 @@ def main():
     
     try:
         # On lance watcher.py qui va dépiler tous les dossiers Input_Screenshots
-        cmd = [sys.executable, "watcher.py", "--account", "all", "--publish", "--submit"]
+        watcher_acc = args.account if args.account else "all"
+        cmd = [sys.executable, "watcher.py", "--account", watcher_acc, "--publish", "--submit"]
         if args.hidden:
             cmd.append("--hidden")
             
-        subprocess.run(cmd)
+        # On lance watcher.py avec un timeout de 1 heure pour eviter un blocage infini
+        subprocess.run(cmd, timeout=3600)
+    except subprocess.TimeoutExpired:
+        print("\n❌ Erreur : Le Watcher a depasse le delai de 1 heure (Timeout).")
     except KeyboardInterrupt:
         print("\nArrêt manuel du processus.")
     except Exception as e:

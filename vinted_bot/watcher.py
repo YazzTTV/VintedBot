@@ -435,6 +435,15 @@ def start_watcher(account_name="all", publish=False, submit=False, hidden=False)
     file_queue = queue.Queue()
     observer = Observer()
     
+    # Nettoyage d'un éventuel verrou résiduel lié à un crash précédent
+    lock_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "global_watcher.lock")
+    if os.path.exists(lock_path):
+        try:
+            os.remove(lock_path)
+            print(f"[Watcher] Verrou global residuel nettoye au demarrage.")
+        except OSError:
+            pass
+            
     print(f"\n" + "="*50, flush=True)
     if len(accounts) > 1:
         print(f"[WATCHER] DEMARRE EN MODE MULTI-COMPTE ({len(accounts)} comptes)", flush=True)

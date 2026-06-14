@@ -175,6 +175,26 @@ document.addEventListener('DOMContentLoaded', () => {
     
     let isBotActive = false;
 
+    // Récupérer le compte Vinted connecté
+    chrome.storage.local.get(['lastDetectedUser'], (result) => {
+        const badge = document.getElementById('account-name-badge');
+        if (badge && result.lastDetectedUser) {
+            badge.textContent = "@" + result.lastDetectedUser;
+            badge.style.display = "inline-block";
+        }
+    });
+
+    // Écouter les changements de compte en temps réel
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (namespace === 'local' && changes.lastDetectedUser) {
+            const badge = document.getElementById('account-name-badge');
+            if (badge && changes.lastDetectedUser.newValue) {
+                badge.textContent = "@" + changes.lastDetectedUser.newValue;
+                badge.style.display = "inline-block";
+            }
+        }
+    });
+
     // Récupérer l'état initial du Bot
     chrome.runtime.sendMessage({ action: "getBotStatus" }, (response) => {
         if (response && response.status !== undefined) {
