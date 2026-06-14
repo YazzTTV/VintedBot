@@ -115,6 +115,7 @@ export async function POST(request: Request) {
           lienVente,
           botAccountId: botAccountId || null, // 🚀 Nouveau champ !
           statut: 'EN_ATTENTE',
+          spvState: sourcingItem ? 'PANIER' : 'A_COMMANDER', // Nouveau: Directement au panier si c'est du sourcing !
           dateLimiteExpedition: addWorkingDays(new Date(), 5)
         }
       })

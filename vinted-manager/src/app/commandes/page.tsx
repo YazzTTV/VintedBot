@@ -26,6 +26,8 @@ export default function CommandesPage() {
   const [isSuccess, setIsSuccess] = useState(false)
   const [processingId, setProcessingId] = useState<string | null>(null)
   const [pastCommandes, setPastCommandes] = useState<any[]>([])
+  const [commandesAFaire, setCommandesAFaire] = useState<any[]>([])
+  const [loadingAFaire, setLoadingAFaire] = useState(true)
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false)
   const [historyFilter, setHistoryFilter] = useState("")
   
@@ -189,7 +191,19 @@ export default function CommandesPage() {
     } catch (e) { console.error(e) }
   }
 
-  useEffect(() => { fetchCommandes() }, [])
+  const fetchAFaire = async () => {
+    try {
+      setLoadingAFaire(true)
+      const res = await fetch(`/api/commandes/a-faire?t=${Date.now()}`)
+      const json = await res.json()
+      if (json.success) setCommandesAFaire(json.data)
+    } catch (e) { console.error(e) } finally { setLoadingAFaire(false) }
+  }
+
+  useEffect(() => { 
+    fetchCommandes() 
+    fetchAFaire()
+  }, [])
 
   const handleChange = (e: any) => {
     setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }))
@@ -433,6 +447,45 @@ export default function CommandesPage() {
         <h1 className="text-3xl font-bold text-white tracking-tight">Commandes Fournisseurs</h1>
         <p className="text-zinc-400 mt-1 text-sm">Enregistrez vos nouveaux achats en gros. Les articles seront générés automatiquement dans le stock.</p>
       </header>
+
+      {/* Commandes à Faire */}
+      <section className="bg-zinc-950 border border-zinc-800/60 rounded-2xl p-6 shadow-2xl flex flex-col backdrop-blur-sm relative overflow-hidden">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <ShoppingBag className="w-5 h-5 text-indigo-400" />
+              À Commander Aujourd'hui
+            </h2>
+            <p className="text-xs text-zinc-500 mt-0.5">Articles vendus en attente d'achat fournisseur.</p>
+          </div>
+          <a href="https://fr.shein.com/cart" target="_blank" rel="noopener noreferrer" className="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors shadow-md">
+            Voir le panier
+          </a>
+        </div>
+
+        <div className="space-y-3">
+          {loadingAFaire ? (
+            <div className="text-center py-6 text-zinc-500 text-xs animate-pulse">Chargement...</div>
+          ) : commandesAFaire?.length > 0 ? (
+            commandesAFaire.map((cmd: any) => (
+              <div key={cmd.id} className="flex items-center justify-between p-3 bg-zinc-900/50 border border-zinc-800/50 rounded-xl">
+                <div className="flex flex-col">
+                  <span className="text-sm font-semibold text-white">{cmd.title}</span>
+                  <span className="text-xs text-zinc-500">Acheté par {cmd.buyer} pour {cmd.price}€</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-sm font-bold text-emerald-400">Bénéfice est. : {cmd.estimatedProfit}€</span>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Achat prévu : {cmd.purchasePrice}€</div>
+                </div>
+              </div>
+            ))
+          ) : (
+             <div className="text-center py-8 text-zinc-500 text-sm">
+               Aucune commande en attente.
+             </div>
+          )}
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         

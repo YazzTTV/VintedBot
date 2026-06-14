@@ -31,26 +31,27 @@ import ParcelAlertBanner from "@/components/ParcelAlertBanner"
 export default function Dashboard() {
   const [stats, setStats] = React.useState<any>(null)
   const [loading, setLoading] = React.useState(true)
+  const [period, setPeriod] = React.useState('global')
 
   React.useEffect(() => {
-    fetch('/api/stats/dashboard')
+    setLoading(true)
+    fetch(`/api/stats/dashboard?period=${period}`)
       .then(r => r.json())
       .then(d => {
         if(d.success) setStats(d.data)
         setLoading(false)
       })
       .catch(() => setLoading(false))
-  }, [])
+  }, [period])
 
-  // Fallback dummy chart structure during loading to maintain layout
   const displayChart = stats?.chartData?.length > 0 ? stats.chartData : [
-    { date: 'Lun', sales: 0, profit: 0 },
-    { date: 'Mar', sales: 0, profit: 0 },
-    { date: 'Mer', sales: 0, profit: 0 },
-    { date: 'Jeu', sales: 0, profit: 0 },
-    { date: 'Ven', sales: 0, profit: 0 },
-    { date: 'Sam', sales: 0, profit: 0 },
-    { date: 'Dim', sales: 0, profit: 0 },
+    { date: 'Lun', "CA (€)": 0, "Bénéfice (€)": 0 },
+    { date: 'Mar', "CA (€)": 0, "Bénéfice (€)": 0 },
+    { date: 'Mer', "CA (€)": 0, "Bénéfice (€)": 0 },
+    { date: 'Jeu', "CA (€)": 0, "Bénéfice (€)": 0 },
+    { date: 'Ven', "CA (€)": 0, "Bénéfice (€)": 0 },
+    { date: 'Sam', "CA (€)": 0, "Bénéfice (€)": 0 },
+    { date: 'Dim', "CA (€)": 0, "Bénéfice (€)": 0 },
   ]
 
   return (
@@ -64,16 +65,27 @@ export default function Dashboard() {
           <h1 className="text-2xl sm:text-3xl font-bold text-white tracking-tight">Bonjour Administrateur</h1>
           <p className="text-zinc-400 mt-1 text-sm font-medium flex items-center gap-2">Aperçu général de votre activité de revente en temps réel.</p>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 px-3 py-1 rounded-full border border-emerald-500/20">
+        <div className="flex flex-wrap items-center gap-3">
+          <select 
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            className="bg-zinc-900 border border-zinc-800 text-white text-xs sm:text-sm font-semibold px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors duration-200 shadow-md outline-none focus:border-emerald-500/50 cursor-pointer"
+          >
+            <option value="global">Global (Depuis toujours)</option>
+            <option value="month">Ce mois-ci</option>
+            <option value="15d">15 derniers jours</option>
+            <option value="today">Aujourd'hui</option>
+          </select>
+
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 px-3 py-2 rounded-lg border border-emerald-500/20 shadow-md">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
-            Live Updates
+            Live
           </span>
           <button className="bg-white text-black text-xs sm:text-sm font-semibold px-3 py-2 rounded-lg hover:bg-zinc-200 transition-colors duration-200 shadow-md">
-            Exporter rapport
+            Exporter
           </button>
         </div>
       </header>
@@ -173,7 +185,7 @@ export default function Dashboard() {
                 />
                 <Area 
                   type="monotone" 
-                  dataKey="sales" 
+                  dataKey="CA (€)" 
                   stroke="#10b981" 
                   strokeWidth={3}
                   fillOpacity={1} 
@@ -182,7 +194,7 @@ export default function Dashboard() {
                 />
                 <Area 
                   type="monotone" 
-                  dataKey="profit" 
+                  dataKey="Bénéfice (€)" 
                   stroke="#3b82f6" 
                   strokeWidth={2}
                   fillOpacity={1} 
@@ -236,44 +248,7 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Commandes à Faire (Phase 2) */}
-      <section className="bg-zinc-950 border border-zinc-800/60 rounded-2xl p-6 shadow-2xl flex flex-col backdrop-blur-sm relative overflow-hidden">
-        <div className="flex justify-between items-center mb-6">
-          <div>
-            <h2 className="text-lg font-bold text-white flex items-center gap-2">
-              <ShoppingBag className="w-5 h-5 text-indigo-400" />
-              À Commander Aujourd'hui
-            </h2>
-            <p className="text-xs text-zinc-500 mt-0.5">Articles vendus en attente d'achat fournisseur.</p>
-          </div>
-          <button className="bg-indigo-500 hover:bg-indigo-600 text-white text-xs font-semibold px-4 py-2 rounded-lg transition-colors shadow-md">
-            Voir le panier
-          </button>
-        </div>
 
-        <div className="space-y-3">
-          {loading ? (
-            <div className="text-center py-6 text-zinc-500 text-xs animate-pulse">Chargement...</div>
-          ) : stats?.commandesAFaire?.length > 0 ? (
-            stats.commandesAFaire.map((cmd: any) => (
-              <div key={cmd.id} className="flex items-center justify-between p-3 bg-zinc-900/50 border border-zinc-800/50 rounded-xl">
-                <div className="flex flex-col">
-                  <span className="text-sm font-semibold text-white">{cmd.title}</span>
-                  <span className="text-xs text-zinc-500">Acheté par {cmd.buyer} pour {cmd.price}€</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-sm font-bold text-emerald-400">Bénéfice est. : {cmd.estimatedProfit}€</span>
-                  <div className="text-[10px] text-zinc-500 mt-0.5">Achat prévu : {cmd.purchasePrice}€</div>
-                </div>
-              </div>
-            ))
-          ) : (
-             <div className="text-center py-8 text-zinc-500 text-sm">
-               Aucune commande en attente.
-             </div>
-          )}
-        </div>
-      </section>
 
       {/* Flotte de Bots & Statuts Financiers Réels (Phase 2) */}
       <section className="bg-zinc-950 border border-zinc-800/60 rounded-2xl p-6 shadow-2xl flex flex-col backdrop-blur-sm relative overflow-hidden">

@@ -81,8 +81,11 @@ export function fuzzyMatch(title1: string, title2: string): boolean {
   if (words1.length === 0 || words2.length === 0) return false
   
   const common = words1.filter(w => words2.includes(w))
-  // Si au moins 2 mots de plus de 3 lettres matchent (ou tous si moins de 2)
-  return common.length >= Math.min(2, words1.length)
+  
+  if (words1.length <= 2) return common.length === words1.length;
+  
+  const threshold = Math.ceil(words1.length * 0.75);
+  return common.length >= threshold;
 }
 
 /**

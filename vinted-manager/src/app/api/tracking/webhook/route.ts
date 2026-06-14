@@ -37,23 +37,28 @@ export async function POST(request: Request) {
       }
     })
 
-    // Si le statut est "LIVRE" (ou équivalent logistique), on déclenche l'envoi WhatsApp
-    if (status.toUpperCase() === 'LIVRE' || status.toUpperCase() === 'DELIVERED') {
-      
-      // On cherche les ventes associées à ce parcel
-      const ventes = await prisma.vente.findMany({
-        where: { parcelId: parcel.id },
-        include: { expedition: true, article: true }
-      })
+    // En fonction du nouveau statut, on met à jour les ventes associées
+    const ventes = await prisma.vente.findMany({
+      where: { parcelId: parcel.id },
+      include: { expedition: true, article: true }
+    })
 
-      for (const vente of ventes) {
+    for (const vente of ventes) {
+      const isLivre = status.toUpperCase() === 'LIVRE' || status.toUpperCase() === 'DELIVERED';
+      const isRetour = status.toUpperCase() === 'RETOUR';
+      const isIncident = status.toUpperCase() === 'INCIDENT';
+
+      if (isLivre) {
+        // On passe en statut "A_EXPEDIER"
+        await prisma.vente.update({
+          where: { id: vente.id },
+          data: { 
+            statut: 'A_EXPEDIER',
+            spvState: 'ARRIVE_LOGISTICIEN'
+          }
+        })
+
         if (vente.expedition?.bordereauUrl) {
-          // On passe en statut "A_EXPEDIER"
-          await prisma.vente.update({
-            where: { id: vente.id },
-            data: { statut: 'A_EXPEDIER' }
-          })
-          
           let imageUrl = 'https://via.placeholder.com/300?text=Image+Produit'
           if (vente.article?.lienProduit) {
             const sourcing = await prisma.sourcingProduct.findFirst({
@@ -68,6 +73,16 @@ export async function POST(request: Request) {
           console.log(`[Webhook] Colis ${trackingNumber} livré. Envoi WhatsApp pour la vente ${vente.id}...`)
           await dispatchToLogistician(vente.id, imageUrl, vente.expedition.bordereauUrl)
         }
+      } else if (isRetour) {
+        await prisma.vente.update({
+          where: { id: vente.id },
+          data: { spvState: 'RETOUR' }
+        })
+      } else if (isIncident) {
+        await prisma.vente.update({
+          where: { id: vente.id },
+          data: { spvState: 'INCIDENT' }
+        })
       }
     }
 

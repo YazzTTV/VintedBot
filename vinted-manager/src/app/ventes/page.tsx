@@ -224,7 +224,11 @@ export default function VentesPage() {
 
     // 2. Filtre par Statut Logistique
     if (filterStatus !== 'all') {
-      result = result.filter(v => v.statut === filterStatus)
+      if (filterStatus === 'EN_ATTENTE') {
+        result = result.filter(v => v.statut === 'EN_ATTENTE' || v.statut === 'A_EXPEDIER')
+      } else {
+        result = result.filter(v => v.statut === filterStatus)
+      }
     }
 
     // 3. Algorithmes de Tri dynamiques
@@ -528,7 +532,7 @@ export default function VentesPage() {
                 <th className="px-3 py-4">Désignation Article</th>
                 <th className="px-3 py-4 text-right">Prix Vente</th>
                 <th className="px-3 py-4 text-right">Bénéfice Net</th>
-                <th className="px-3 py-4 text-center">Statut</th>
+                <th className="px-3 py-4 text-center">Statuts</th>
                 <th className="px-3 py-4 text-center">Délai Exp.</th>
                 <th className="px-3 py-4 text-center">Bordereau</th>
                 <th className="px-3 py-4 text-right">Actions</th>
@@ -632,17 +636,37 @@ export default function VentesPage() {
                       </div>
                     </td>
 
-                    {/* Col 5: Shipment Status */}
+                    {/* Col 5: Statuts (Vinted + Fournisseur) */}
                     <td className="px-3 py-4 text-center">
-                       {v.statut === 'EXPEDIEE' ? (
-                         <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
-                           Expédiée
-                         </span>
-                       ) : (
-                         <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
-                           À envoyer
-                         </span>
-                       )}
+                      <div className="flex flex-col items-center gap-1.5 justify-center">
+                         {/* Statut Vinted */}
+                         {v.statut === 'EXPEDIEE' ? (
+                           <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
+                             Expédiée
+                           </span>
+                         ) : (
+                           <span className="text-[10px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
+                             À envoyer
+                           </span>
+                         )}
+
+                         {/* Statut SPV (Fournisseur) */}
+                         {v.spvState === 'TRAITEE' ? (
+                           <span className="text-[9px] font-bold text-zinc-400 bg-zinc-800/50 px-2 py-0.5 rounded-lg whitespace-nowrap">✓ Traitée</span>
+                         ) : v.spvState === 'ARRIVE_LOGISTICIEN' ? (
+                           <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-lg whitespace-nowrap">📦 Au Logisticien</span>
+                         ) : v.spvState === 'SUIVI_EN_COURS' ? (
+                           <span className="text-[9px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-lg whitespace-nowrap">🚚 Suivi en cours</span>
+                         ) : v.spvState === 'PANIER' ? (
+                           <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-lg whitespace-nowrap">🛒 Au panier</span>
+                         ) : v.spvState === 'INCIDENT' ? (
+                           <span className="text-[9px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-2 py-0.5 rounded-lg whitespace-nowrap">⚠️ Incident</span>
+                         ) : v.spvState === 'RETOUR' ? (
+                           <span className="text-[9px] font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-2 py-0.5 rounded-lg whitespace-nowrap">↩️ Retour</span>
+                         ) : (
+                           <span className="text-[9px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-lg animate-pulse whitespace-nowrap">⚠️ À commander</span>
+                         )}
+                      </div>
                     </td>
 
                     {/* Col 6: Délai Expéd. */}
@@ -714,7 +738,7 @@ export default function VentesPage() {
                       )}
                     </td>
 
-                    {/* Col 8: Options Menu Popover (⋮) */}
+                    {/* Col 9: Options Menu Popover (⋮) */}
                     <td className="px-6 py-4 text-right relative">
                       <div className="relative flex justify-end items-center">
                         <button
@@ -750,6 +774,76 @@ export default function VentesPage() {
                                   className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-black text-rose-400 hover:text-white hover:bg-rose-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
                                 >
                                   🛒 Auto-Commander (Shein)
+                                </button>
+                              )}
+
+                              {/* Actions SPV Manuelles */}
+                              {v.spvState === 'A_COMMANDER' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'PANIER' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-400 hover:text-white hover:bg-amber-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  🛒 Marquer "Au Panier"
+                                </button>
+                              )}
+                              {v.spvState === 'PANIER' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'SUIVI_EN_COURS' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-blue-400 hover:text-white hover:bg-blue-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  🚚 Marquer "Suivi en cours"
+                                </button>
+                              )}
+                              {v.spvState === 'SUIVI_EN_COURS' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'ARRIVE_LOGISTICIEN' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-emerald-400 hover:text-white hover:bg-emerald-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  📦 Marquer "Au Logisticien"
+                                </button>
+                              )}
+                              {v.spvState === 'ARRIVE_LOGISTICIEN' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'TRAITEE' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  ✓ Marquer "Traitée"
                                 </button>
                               )}
 
@@ -912,7 +1006,7 @@ export default function VentesPage() {
                   {/* Status / Deadline / Actions */}
                   <div className="flex items-center justify-between border-t border-zinc-900 pt-3 text-xs">
                     <div className="flex flex-col gap-1">
-                      <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         {v.statut === 'EXPEDIEE' ? (
                           <span className="text-[9px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full uppercase tracking-widest">
                             Expédiée
@@ -921,6 +1015,23 @@ export default function VentesPage() {
                           <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full uppercase tracking-widest">
                             À envoyer
                           </span>
+                        )}
+
+                        {/* SPV Badge in Mobile */}
+                        {v.spvState === 'TRAITEE' ? (
+                          <span className="text-[8px] font-bold text-zinc-400 bg-zinc-800/50 px-1.5 py-0.5 rounded-lg whitespace-nowrap">✓ Traitée</span>
+                        ) : v.spvState === 'ARRIVE_LOGISTICIEN' ? (
+                          <span className="text-[8px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded-lg whitespace-nowrap">📦 Logisticien</span>
+                        ) : v.spvState === 'SUIVI_EN_COURS' ? (
+                          <span className="text-[8px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded-lg whitespace-nowrap">🚚 Suivi en cours</span>
+                        ) : v.spvState === 'PANIER' ? (
+                          <span className="text-[8px] font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded-lg whitespace-nowrap">🛒 Au panier</span>
+                        ) : v.spvState === 'INCIDENT' ? (
+                          <span className="text-[8px] font-bold text-red-400 bg-red-500/10 border border-red-500/20 px-1.5 py-0.5 rounded-lg whitespace-nowrap">⚠️ Incident</span>
+                        ) : v.spvState === 'RETOUR' ? (
+                          <span className="text-[8px] font-bold text-purple-400 bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 rounded-lg whitespace-nowrap">↩️ Retour</span>
+                        ) : (
+                          <span className="text-[8px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-1.5 py-0.5 rounded-lg animate-pulse whitespace-nowrap">⚠️ À commander</span>
                         )}
                       </div>
                       <div>
@@ -970,6 +1081,76 @@ export default function VentesPage() {
                                 <Truck className="w-3.5 h-3.5 text-teal-500" /> 
                                 {v.statut === 'EXPEDIEE' ? 'Marquer À Envoyer' : 'Marquer Expédiée'}
                               </button>
+
+                              {/* Actions SPV Manuelles (Mobile) */}
+                              {v.spvState === 'A_COMMANDER' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'PANIER' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-amber-400 hover:text-white hover:bg-amber-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  🛒 Marquer "Au Panier"
+                                </button>
+                              )}
+                              {v.spvState === 'PANIER' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'SUIVI_EN_COURS' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-blue-400 hover:text-white hover:bg-blue-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  🚚 Marquer "Suivi en cours"
+                                </button>
+                              )}
+                              {v.spvState === 'SUIVI_EN_COURS' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'ARRIVE_LOGISTICIEN' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-emerald-400 hover:text-white hover:bg-emerald-950/30 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  📦 Marquer "Au Logisticien"
+                                </button>
+                              )}
+                              {v.spvState === 'ARRIVE_LOGISTICIEN' && (
+                                <button 
+                                  type="button"
+                                  onClick={async () => {
+                                    setOpenPopoverId(null);
+                                    await fetch(`/api/ventes/${v.id}`, {
+                                      method: 'PATCH',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ spvState: 'TRAITEE' })
+                                    });
+                                    loadVentes();
+                                  }}
+                                  className="w-full text-left flex items-center gap-2 px-3 py-2 text-xs font-semibold text-zinc-400 hover:text-white hover:bg-zinc-900 rounded-lg transition-colors cursor-pointer border-t border-zinc-900"
+                                >
+                                  ✓ Marquer "Traitée"
+                                </button>
+                              )}
 
                               {v.statut === 'EN_ATTENTE' && (
                                 <>

@@ -18,25 +18,52 @@ import {
   Flame,
   Boxes,
   Puzzle,
-  Shirt
+  Shirt,
+  ShieldAlert
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import PushToggle from "@/components/PushToggle"
 
-const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Inbox 💬', href: '/inbox', icon: MessageSquare },
-  { name: 'Winners 🔥', href: '/winners', icon: Flame },
-  { name: 'Market Spy 🔍', href: '/market-spy', icon: Search },
-  { name: 'Dressing 👗', href: '/dressing', icon: Shirt },
-  { name: 'Extension 🧩', href: '/extension', icon: Puzzle },
-  { name: 'Commandes', href: '/commandes', icon: ShoppingBag },
-  { name: 'Stock', href: '/stock', icon: Boxes },
-  { name: 'Ventes', href: '/ventes', icon: Tag },
-  { name: 'Suivi Colis', href: '/parcels', icon: Package },
-  { name: 'Expéditions', href: '/expeditions', icon: Truck },
-  { name: 'Sourcing', href: '/sourcing', icon: Search },
-  { name: 'Archives', href: '/archives', icon: Archive },
+const navigationGroups = [
+  {
+    category: 'PILOTAGE',
+    items: [
+      { name: 'Dashboard', href: '/', icon: LayoutDashboard },
+      { name: 'Ventes', href: '/ventes', icon: Tag },
+      { name: 'Commandes', href: '/commandes', icon: ShoppingBag },
+    ]
+  },
+  {
+    category: 'ANNONCES',
+    items: [
+      { name: 'Dressing 👗', href: '/dressing', icon: Shirt },
+      { name: 'Winners 🔥', href: '/winners', icon: Flame },
+      { name: 'Archives', href: '/archives', icon: Archive },
+    ]
+  },
+  {
+    category: 'MESSAGERIE & SAV',
+    items: [
+      { name: 'Inbox 💬', href: '/inbox', icon: MessageSquare },
+      { name: 'SAV & Litiges', href: '/post-sale', icon: ShieldAlert },
+    ]
+  },
+  {
+    category: 'EXPÉDITION & STOCK',
+    items: [
+      { name: 'Stock', href: '/stock', icon: Boxes },
+      { name: 'Suivi Colis', href: '/parcels', icon: Package },
+      { name: 'Expéditions', href: '/expeditions', icon: Truck },
+    ]
+  },
+  {
+    category: 'OUTILS & RECHERCHE',
+    items: [
+      { name: 'Market Spy 🔍', href: '/market-spy', icon: Search },
+      { name: 'Sourcing', href: '/sourcing', icon: Search },
+      { name: 'Extension 🧩', href: '/extension', icon: Puzzle },
+    ]
+  }
 ]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -71,31 +98,38 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
 
-        <nav className="flex-1 px-4 py-6 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
-          {navigation.map((item) => {
-            const isActive = pathname === item.href
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ease-out relative overflow-hidden group",
-                  isActive 
-                    ? "bg-zinc-900 text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]" 
-                    : "text-zinc-400 hover:text-white hover:bg-zinc-900/50"
-                )}
-              >
-                {isActive && (
-                  <div className="absolute left-0 top-2 bottom-2 w-1 bg-emerald-500 rounded-r-full shadow-[0_0_10px_#10b981]" />
-                )}
-                <item.icon className={cn(
-                  "w-[18px] h-[18px] transition-transform duration-200 group-hover:scale-110", 
-                  isActive ? "text-emerald-500" : "text-zinc-500 group-hover:text-zinc-300"
-                )} />
-                {item.name}
-              </Link>
-            )
-          })}
+        <nav className="flex-1 px-3 py-6 space-y-6 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
+          {navigationGroups.map((group) => (
+            <div key={group.category} className="space-y-1">
+              <h3 className="px-3 text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-2">
+                {group.category}
+              </h3>
+              {group.items.map((item) => {
+                const isActive = pathname === item.href
+                return (
+                  <Link
+                    key={item.name}
+                    href={item.href}
+                    className={cn(
+                      "flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 ease-out relative overflow-hidden group",
+                      isActive 
+                        ? "bg-zinc-900 text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]" 
+                        : "text-zinc-400 hover:text-white hover:bg-zinc-900/50"
+                    )}
+                  >
+                    {isActive && (
+                      <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-emerald-500 rounded-r-full shadow-[0_0_10px_#10b981]" />
+                    )}
+                    <item.icon className={cn(
+                      "w-[16px] h-[16px] transition-transform duration-200 group-hover:scale-110", 
+                      isActive ? "text-emerald-500" : "text-zinc-500 group-hover:text-zinc-300"
+                    )} />
+                    {item.name}
+                  </Link>
+                )
+              })}
+            </div>
+          ))}
         </nav>
 
         <div className="p-4 border-t border-zinc-800/50 mt-auto">
@@ -143,26 +177,33 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </button>
             </div>
 
-            <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-              {navigation.map((item) => {
-                const isActive = pathname === item.href
-                return (
-                  <Link
-                    key={item.name}
-                    href={item.href}
-                    onClick={() => setIsMobileMenuOpen(false)}
-                    className={cn(
-                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
-                      isActive 
-                        ? "bg-zinc-900 text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]" 
-                        : "text-zinc-400 hover:text-white hover:bg-zinc-900/50"
-                    )}
-                  >
-                    <item.icon className={cn("w-[18px] h-[18px]", isActive ? "text-emerald-500" : "text-zinc-500")} />
-                    {item.name}
-                  </Link>
-                )
-              })}
+            <nav className="flex-1 px-3 py-4 space-y-5 overflow-y-auto">
+              {navigationGroups.map((group) => (
+                <div key={group.category} className="space-y-1">
+                  <h3 className="px-3 text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-1">
+                    {group.category}
+                  </h3>
+                  {group.items.map((item) => {
+                    const isActive = pathname === item.href
+                    return (
+                      <Link
+                        key={item.name}
+                        href={item.href}
+                        onClick={() => setIsMobileMenuOpen(false)}
+                        className={cn(
+                          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all",
+                          isActive 
+                            ? "bg-zinc-900 text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]" 
+                            : "text-zinc-400 hover:text-white hover:bg-zinc-900/50"
+                        )}
+                      >
+                        <item.icon className={cn("w-[16px] h-[16px]", isActive ? "text-emerald-500" : "text-zinc-500")} />
+                        {item.name}
+                      </Link>
+                    )
+                  })}
+                </div>
+              ))}
             </nav>
 
             <div className="p-4 border-t border-zinc-800/50 mt-auto bg-zinc-950/80">

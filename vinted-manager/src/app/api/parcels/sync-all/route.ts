@@ -68,6 +68,30 @@ export async function POST() {
               daysInTransit: result.daysInTransit ?? null,
             },
           })
+
+          if (statusEnum === ParcelStatus.LIVRE) {
+            await tx.vente.updateMany({
+              where: { parcelId: parcel.id },
+              data: {
+                statut: 'A_EXPEDIER',
+                spvState: 'ARRIVE_LOGISTICIEN'
+              }
+            })
+          } else if (statusEnum === ParcelStatus.RETOUR) {
+            await tx.vente.updateMany({
+              where: { parcelId: parcel.id },
+              data: {
+                spvState: 'RETOUR'
+              }
+            })
+          } else if (statusEnum === ParcelStatus.INCIDENT) {
+            await tx.vente.updateMany({
+              where: { parcelId: parcel.id },
+              data: {
+                spvState: 'INCIDENT'
+              }
+            })
+          }
         })
 
         return { id: parcel.id, success: true }

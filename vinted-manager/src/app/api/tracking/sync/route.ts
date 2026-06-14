@@ -80,14 +80,33 @@ export async function POST(request: Request) {
           })
         }
 
+        let updateData: any = {
+          parcelId: parcel.id,
+          statut: 'EN_ATTENTE', // Prêt pour l'expédition finale
+          spvState: 'SUIVI_EN_COURS' // NOUVEAU : Met à jour le suivi post-vente
+        }
+
+        // 🚀 FIX: Si on a récupéré le prix d'achat depuis Shein, on met à jour la finance !
+        if (order.price !== undefined && order.price !== null) {
+            const purchasePrice = Number(order.price);
+            updateData.purchasePriceSnapshot = purchasePrice;
+            
+            const prixVente = Number(matchedVente.prixVente);
+            const fraisVinted = Number(matchedVente.fraisVinted || 0.70);
+            const fraisPortAchat = Number(matchedVente.article?.fraisPortUnitaires || 0);
+            
+            const coutTotalAchat = purchasePrice + fraisPortAchat;
+            const beneficeNet = prixVente - coutTotalAchat - fraisVinted;
+            const margePct = prixVente > 0 ? (beneficeNet / prixVente) * 100 : 0;
+            
+            updateData.beneficeNet = beneficeNet;
+            updateData.margePct = margePct;
+        }
+
         // Lier la vente au colis et passer le statut à EN_ATTENTE (si c'était à faire)
         await prisma.vente.update({
           where: { id: matchedVente.id },
-          data: {
-            parcelId: parcel.id,
-            statut: 'EN_ATTENTE', // Prêt pour l'expédition finale
-            spvState: 'SUIVI_EN_COURS' // NOUVEAU : Met à jour le suivi post-vente
-          }
+          data: updateData
         })
         
         linkedCount++

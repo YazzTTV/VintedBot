@@ -1,12 +1,40 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const { searchParams } = new URL(request.url)
+    const period = searchParams.get('period') || 'global'
+
+    let dateFilterVentes: any = undefined
+    let dateFilterCommandes: any = undefined
+    
+    if (period !== 'global') {
+      const now = new Date()
+      if (period === 'today') {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        dateFilterVentes = { gte: start }
+        dateFilterCommandes = { gte: start }
+      } else if (period === '15d') {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 15)
+        dateFilterVentes = { gte: start }
+        dateFilterCommandes = { gte: start }
+      } else if (period === 'month') {
+        const start = new Date(now.getFullYear(), now.getMonth(), 1)
+        dateFilterVentes = { gte: start }
+        dateFilterCommandes = { gte: start }
+      }
+    }
+
+    const sevenDaysAgo = new Date()
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+    sevenDaysAgo.setHours(0, 0, 0, 0)
     // Parallel metrics fetching for performance
     const [aggregateSales, aggregateExpenses, stockCount, last7DaysVentes, realAlerts, botStats, botList, commandesAFaireData] = await Promise.all([
       // 1. Global Sales Statistics
       prisma.vente.aggregate({
+        where: dateFilterVentes ? { dateVente: dateFilterVentes } : undefined,
         _sum: {
           prixVente: true,
           beneficeNet: true
@@ -17,6 +45,7 @@ export async function GET() {
       }),
       // 2. Global Supplier Expenses (prixTotal of all orders)
       prisma.commandeFournisseur.aggregate({
+        where: dateFilterCommandes ? { dateCommande: dateFilterCommandes } : undefined,
         _sum: {
           prixTotal: true
         }
@@ -27,7 +56,7 @@ export async function GET() {
       }),
       // 4. Dynamic time series data for the UI charts
       prisma.vente.findMany({
-        take: 100, // fetch last 100 sales to group
+        where: { dateVente: { gte: sevenDaysAgo } },
         orderBy: { dateVente: 'desc' },
         select: {
           dateVente: true,
@@ -97,31 +126,32 @@ export async function GET() {
     })
 
     // Construct chart data structure (grouped by date format)
-    // Note: For a small app, grouping results programmatically is highly efficient
-    const salesByDate: Record<string, { sales: number, profit: number }> = {}
+    const salesByDate: Record<string, { displayDate: string, sales: number, profit: number }> = {}
     
     // Take current date minus 6 days for the dynamic week layout
     for (let i = 6; i >= 0; i--) {
       const d = new Date()
       d.setDate(d.getDate() - i)
-      const key = d.toLocaleDateString('fr-FR', { weekday: 'short' }) // Lun, Mar...
-      salesByDate[key] = { sales: 0, profit: 0 }
+      const uniqueKey = d.toISOString().split('T')[0] // ex: 2023-10-25
+      const displayKey = d.toLocaleDateString('fr-FR', { weekday: 'short' }) // lun., mar...
+      salesByDate[uniqueKey] = { displayDate: displayKey, sales: 0, profit: 0 }
     }
 
     // Fill map with real DB data
     last7DaysVentes.forEach(v => {
-      const key = new Date(v.dateVente).toLocaleDateString('fr-FR', { weekday: 'short' })
-      if (salesByDate[key]) {
-        salesByDate[key].sales += Number(v.prixVente)
-        salesByDate[key].profit += Number(v.beneficeNet)
+      const vDate = new Date(v.dateVente)
+      const uniqueKey = vDate.toISOString().split('T')[0]
+      if (salesByDate[uniqueKey]) {
+        salesByDate[uniqueKey].sales += Number(v.prixVente)
+        salesByDate[uniqueKey].profit += Number(v.beneficeNet)
       }
     })
 
     // Map to Recharts ready object array
-    const chartData = Object.entries(salesByDate).map(([date, vals]) => ({
-      date,
-      sales: Number(vals.sales.toFixed(2)),
-      profit: Number(vals.profit.toFixed(2))
+    const chartData = Object.values(salesByDate).map((vals) => ({
+      date: vals.displayDate,
+      "CA (€)": Number(vals.sales.toFixed(2)),
+      "Bénéfice (€)": Number(vals.profit.toFixed(2))
     }))
 
     const totalPurchase = commandesAFaireData.reduce((acc, v) => acc + Number(v.purchasePriceSnapshot || 0), 0)
