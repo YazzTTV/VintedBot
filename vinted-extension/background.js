@@ -64,12 +64,53 @@ chrome.action.onClicked.addListener(async () => {
  * 🎯 Utilité critique : Sélectionne l'onglet Vinted optimal de manière intelligente.
  * Priorise l'onglet actif de la fenêtre courante pour garantir que c'est la session active de l'utilisateur.
  */
+const VINTED_URL_PATTERNS = [
+    "*://*.vinted.fr/*", "*://*.vinted.com/*", "*://*.vinted.nl/*",
+    "*://*.vinted.be/*", "*://*.vinted.de/*", "*://*.vinted.es/*", "*://*.vinted.it/*",
+    "*://*.vinted.pl/*", "*://*.vinted.pt/*", "*://*.vinted.lt/*", "*://*.vinted.cz/*", "*://*.vinted.co.uk/*"
+];
+
+function isVintedUrl(url) {
+    if (!url) return false;
+    try {
+        const host = new URL(url).hostname;
+        return host.endsWith('.vinted.fr') || host.endsWith('.vinted.com') || host.endsWith('.vinted.nl') ||
+               host.endsWith('.vinted.be') || host.endsWith('.vinted.de') || host.endsWith('.vinted.es') ||
+               host.endsWith('.vinted.it') || host.endsWith('.vinted.pl') || host.endsWith('.vinted.pt') ||
+               host.endsWith('.vinted.lt') || host.endsWith('.vinted.cz') || host.endsWith('.vinted.co.uk');
+    } catch(e) { return false; }
+}
+
+// === CAPTURE DES TOKENS VINTED RÉELS ===
+// On intercepte les vraies requêtes API de Vinted pour récupérer le x-csrf-token et x-anon-id
+// effectivement acceptés par le serveur (plus fiable que le scraping du meta tag, qui peut être périmé).
+const vintedTokens = { csrf: null, anonId: null, ts: 0 };
+try {
+    chrome.webRequest.onBeforeSendHeaders.addListener(
+        (details) => {
+            let gotCsrf = false;
+            for (const h of details.requestHeaders || []) {
+                const n = h.name.toLowerCase();
+                if (n === "x-csrf-token" && h.value) { vintedTokens.csrf = h.value; gotCsrf = true; }
+                if (n === "x-anon-id" && h.value) vintedTokens.anonId = h.value;
+            }
+            if (gotCsrf) vintedTokens.ts = Date.now();
+        },
+        { urls: [
+            "*://*.vinted.fr/api/*", "*://*.vinted.com/api/*", "*://*.vinted.nl/api/*",
+            "*://*.vinted.be/api/*", "*://*.vinted.de/api/*", "*://*.vinted.es/api/*",
+            "*://*.vinted.it/api/*", "*://*.vinted.pl/api/*", "*://*.vinted.pt/api/*",
+            "*://*.vinted.lt/api/*", "*://*.vinted.cz/api/*", "*://*.vinted.co.uk/api/*"
+        ] },
+        ["requestHeaders", "extraHeaders"]
+    );
+} catch (e) {
+    console.warn("⚠️ Capture webRequest des tokens indisponible:", e.message);
+}
+
 async function getOptimalVintedTab() {
-    const urls = [
-        "*://*.vinted.fr/*", "*://*.vinted.com/*", "*://*.vinted.nl/*", 
-        "*://*.vinted.be/*", "*://*.vinted.de/*", "*://*.vinted.es/*", "*://*.vinted.it/*"
-    ];
-    
+    const urls = VINTED_URL_PATTERNS;
+
     // 1. Onglet actif dans la fenêtre en cours
     const currentActive = await new Promise(resolve => {
         chrome.tabs.query({ active: true, currentWindow: true, url: urls }, resolve);
@@ -87,8 +128,11 @@ async function getOptimalVintedTab() {
         chrome.tabs.query({ url: urls }, resolve);
     });
     if (allVinted && allVinted.length > 0) {
-        const viable = allVinted.filter(t => !t.discarded);
-        return viable.length > 0 ? viable[0] : allVinted[0];
+        // Filtrer : onglets completement chargés et sur une URL Vinted valide
+        const viable = allVinted.filter(t => !t.discarded && t.status === 'complete' && isVintedUrl(t.url));
+        if (viable.length > 0) return viable[0];
+        const notDiscarded = allVinted.filter(t => !t.discarded);
+        return notDiscarded.length > 0 ? notDiscarded[0] : allVinted[0];
     }
     return null;
 }
@@ -98,28 +142,256 @@ async function getOptimalVintedTab() {
  * Résout le problème critique sur Arc Browser où les content scripts ne se chargent pas.
  */
 async function fetchUserIdentityDirect(tabId) {
+    try {
+        // Vérifier que l'onglet est bien sur une URL Vinted avant d'injecter
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        if (!tab || !isVintedUrl(tab.url)) {
+            return { success: false, error: "L'onglet n'est plus sur une page Vinted" };
+        }
+        const injection = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: async () => {
+                try {
+                    const r = await fetch("/api/v2/users/current", {
+                        credentials: "include",
+                        headers: { "Accept": "application/json" }
+                    });
+                    if (!r.ok) return { success: false, error: "HTTP " + r.status };
+                    const data = await r.json();
+                    const user = data.user || data;
+                    return {
+                        success: true,
+                        username: user.login || user.username,
+                        id: String(user.id)
+                    };
+                } catch (e) {
+                    return { success: false, error: e.message };
+                }
+            }
+        });
+        return injection?.[0]?.result || { success: false, error: "Injection returned null" };
+    } catch (e) {
+        // L'onglet a navigué vers une page non-autorisée entre la détection et l'injection
+        console.warn("⚠️ [IDENTITY] Impossible d'injecter dans l'onglet:", e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+/**
+ * 🔄 REPOSTE FURTIF (version page MAIN world).
+ * CRITIQUE : Vinted rejette l'upload de photos (/api/v2/photos) si la requête vient du service worker
+ * (Origin: chrome-extension://...). On exécute donc TOUT le reposte dans le contexte de la page Vinted
+ * pour que les requêtes soient en same-origin (comme le navigateur réel).
+ */
+async function repostItemInPage(tabId, itemId, options = {}) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab || !isVintedUrl(tab.url)) {
+        throw new Error("L'onglet n'est plus sur une page Vinted pour le reposte");
+    }
+
+    // ===== ÉTAPE A (Service Worker) : lecture article + téléchargement/traitement des photos =====
+    // Le SW a les host_permissions pour fetch en cross-origin le CDN vinted.net (impossible depuis la page).
+    let itemRes = await vintedFetch(`/api/v2/item_upload/items/${itemId}`);
+    if (!itemRes.success) {
+        console.warn("[REPOST] Fallback /items/ (item_upload a échoué)");
+        itemRes = await vintedFetch(`/api/v2/items/${itemId}`);
+    }
+    if (!itemRes.success) throw new Error(`Lecture article HTTP ${itemRes.status}`);
+    const original = itemRes.data.item || itemRes.data;
+    if (!original) throw new Error("Format article inconnu lors de la lecture");
+    console.log(`🔄 [REPOST] Article lu : "${original.title}"`);
+
+    const originalPhotos = original.photos || [];
+    if (originalPhotos.length === 0) throw new Error("L'annonce d'origine ne contient aucune photo");
+
+    // Helper : Blob → data URL base64 (FileReader indisponible en SW, on passe par arrayBuffer + btoa)
+    const blobToDataUrl = async (blob) => {
+        const buf = await blob.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        const chunk = 0x8000;
+        for (let i = 0; i < bytes.length; i += chunk) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+        }
+        return `data:${blob.type || 'image/jpeg'};base64,${btoa(binary)}`;
+    };
+
+    const photosB64 = [];
+    for (let i = 0; i < originalPhotos.length; i++) {
+        const purl = originalPhotos[i].full_size_url || originalPhotos[i].url;
+        if (!purl) continue;
+        try {
+            const pr = await fetch(purl); // cross-origin OK depuis le SW (host_permissions vinted.net)
+            const pblob = await pr.blob();
+            const processed = await cropImageOffscreen(pblob, options.cropPercent); // rognage / anti-hash
+            photosB64.push(await blobToDataUrl(processed));
+        } catch (e) {
+            console.warn(`⚠️ [REPOST] Échec téléchargement/traitement photo ${i}:`, e.message);
+        }
+    }
+    if (photosB64.length === 0) throw new Error("Aucune photo n'a pu être téléchargée/traitée depuis le CDN");
+
+    // ===== ÉTAPE B (Page MAIN world) : upload photos + création article =====
+    // Ces POSTs DOIVENT être same-origin (Vinted rejette /api/v2/photos depuis chrome-extension://).
+    // Aligné sur l'implémentation de référence vintedRelister (lo-bi) qui fonctionne :
+    //  - un SEUL temp_uuid partagé entre toutes les photos ET la création de l'article
+    //  - header x-enable-multiple-size-groups, pas de X-Money-Object sur l'upload
+    //  - création en un seul appel POST /api/v2/item_upload/items (pas drafts+completion)
     const injection = await chrome.scripting.executeScript({
         target: { tabId },
-        func: async () => {
+        world: "MAIN",
+        func: async (itemId, options, original, photosB64, capturedCsrf, capturedAnonId) => {
+            const log = (...a) => console.log("🔄 [REPOST PAGE]", ...a);
             try {
-                const r = await fetch("/api/v2/users/current", { 
-                    credentials: "include", 
-                    headers: { "Accept": "application/json" } 
-                });
-                if (!r.ok) return { success: false, error: "HTTP " + r.status };
-                const data = await r.json();
-                const user = data.user || data;
-                return { 
-                    success: true, 
-                    username: user.login || user.username, 
-                    id: String(user.id) 
+                const generateUUID = () => (crypto.randomUUID ? crypto.randomUUID() :
+                    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+                        const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+                        return v.toString(16);
+                    }));
+
+                // --- CSRF : priorité aux tokens réels interceptés, sinon meta tag de la page ---
+                let csrf = capturedCsrf || null;
+                if (!csrf) {
+                    const meta = document.querySelector('meta[name="csrf-token"]');
+                    if (meta && meta.content) csrf = meta.content;
+                }
+                if (!csrf) {
+                    for (const s of document.querySelectorAll("script")) {
+                        const m = s.textContent && s.textContent.match(/"csrf[_-]token"\s*[:,]\s*"([^"]+)"/);
+                        if (m) { csrf = m[1]; break; }
+                    }
+                }
+                const anonCookie = document.cookie.match(/(?:^|;\s*)anon_id=([^;]+)/);
+                const anonId = capturedAnonId || (anonCookie ? anonCookie[1] : null);
+                if (!csrf) return { success: false, error: "Token CSRF introuvable (navigue sur Vinted puis réessaie)" };
+
+                // UN SEUL temp_uuid pour toute la session (photos + article) — CRITIQUE
+                const tempUuid = generateUUID();
+
+                const jsonHeaders = { "Accept": "application/json, text/plain, */*", "Content-Type": "application/json", "X-CSRF-Token": csrf };
+                if (anonId) jsonHeaders["X-Anon-Id"] = anonId;
+
+                // --- 1. Upload des photos (same-origin) avec le temp_uuid partagé ---
+                const newPhotoIds = [];
+                let lastPhotoError = null;
+                for (let i = 0; i < photosB64.length; i++) {
+                    try {
+                        const blob = await (await fetch(photosB64[i])).blob(); // data: URL → Blob (page)
+
+                        const fd = new FormData();
+                        fd.append("photo[type]", "item");
+                        fd.append("photo[temp_uuid]", tempUuid);
+                        fd.append("photo[file]", blob, `photo_${i}.jpg`);
+
+                        const upHeaders = { "Accept": "application/json, text/plain, */*", "X-CSRF-Token": csrf, "x-enable-multiple-size-groups": "true" };
+                        if (anonId) upHeaders["X-Anon-Id"] = anonId;
+
+                        const upRes = await fetch("/api/v2/photos", { method: "POST", credentials: "include", headers: upHeaders, body: fd });
+                        if (!upRes.ok) {
+                            let t = ""; try { t = await upRes.text(); } catch (e) {}
+                            lastPhotoError = `HTTP ${upRes.status}: ${t.substring(0, 150)}`;
+                            log(`❌ Photo ${i} échec : ${lastPhotoError}`);
+                            continue;
+                        }
+                        const upData = await upRes.json();
+                        const pid = upData.photo ? upData.photo.id : upData.id;
+                        if (pid) { newPhotoIds.push({ id: pid, orientation: 0 }); log(`✅ Photo ${i} uploadée (ID ${pid})`); }
+                        // Délai humain entre les uploads (anti-détection automatisation)
+                        await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+                    } catch (err) {
+                        lastPhotoError = err.message;
+                    }
+                }
+                if (newPhotoIds.length === 0) return { success: false, error: `Aucune photo uploadée. Dernière erreur: ${lastPhotoError}` };
+
+                // Réordonnancement éventuel
+                let finalPhotos = newPhotoIds;
+                if (Array.isArray(options.photoOrder) && options.photoOrder.length) {
+                    const re = [];
+                    for (const idx of options.photoOrder) if (Number.isInteger(idx) && idx >= 0 && idx < newPhotoIds.length) re.push(newPhotoIds[idx]);
+                    if (re.length) finalPhotos = re;
+                }
+
+                // --- 2. Supprimer l'ancien AVANT publication (évite la détection de doublons) ---
+                const deleteAfter = options.deleteAfter !== undefined ? options.deleteAfter : true;
+                if (deleteAfter) {
+                    let delRes = await fetch(`/api/v2/items/${itemId}/delete`, { method: "POST", credentials: "include", headers: jsonHeaders, body: JSON.stringify({}) });
+                    if (!delRes.ok) {
+                        await fetch(`/api/v2/items/${itemId}`, { method: "DELETE", credentials: "include", headers: jsonHeaders });
+                    }
+                    await new Promise(r => setTimeout(r, 2000));
+                }
+
+                // --- 3. Création de l'article en un seul appel (item_upload/items) ---
+                // Extraction robuste du prix : avec X-Money-Object, Vinted renvoie price comme objet {amount, currency}
+                let basePrice = 0;
+                if (original.price_numeric != null && original.price_numeric !== "") {
+                    basePrice = parseFloat(original.price_numeric);
+                } else if (original.price != null) {
+                    basePrice = (typeof original.price === 'object')
+                        ? parseFloat(original.price.amount || original.price.amount_numeric || 0)
+                        : parseFloat(original.price);
+                }
+                let finalPrice = options.newPrice != null ? parseFloat(options.newPrice) : basePrice;
+                if (!finalPrice || isNaN(finalPrice) || finalPrice < 1) {
+                    return { success: false, error: `Prix invalide (${finalPrice}). Prix original brut: ${JSON.stringify(original.price)} / price_numeric: ${original.price_numeric}` };
+                }
+
+                const itemPayload = {
+                    item: {
+                        id: null,
+                        currency: original.currency || "EUR",
+                        temp_uuid: tempUuid,
+                        title: options.newTitle != null ? options.newTitle : original.title,
+                        description: options.newDescription != null ? options.newDescription : (original.description || ""),
+                        brand_id: original.brand_id,
+                        brand: original.brand || original.brand_title,
+                        size_id: original.size_id,
+                        catalog_id: original.catalog_id,
+                        isbn: original.isbn || null,
+                        author: original.author || null,
+                        book_title: original.book_title || null,
+                        model: original.model || null,
+                        video_game_rating_id: original.video_game_rating_id || null,
+                        is_unisex: original.is_unisex || false,
+                        status_id: original.status_id,
+                        price: finalPrice,
+                        package_size_id: original.package_size_id,
+                        shipment_prices: { domestic: null, international: null },
+                        color_ids: original.color_ids || [original.color1_id, original.color2_id].filter(Boolean),
+                        assigned_photos: finalPhotos,
+                        item_attributes: original.item_attributes || [],
+                        manufacturer: original.manufacturer || null,
+                        manufacturer_labelling: original.manufacturer_labelling || null,
+                        measurement_length: original.measurement_length || null,
+                        measurement_width: original.measurement_width || null,
+                        measurement_unit: original.measurement_unit || null
+                    },
+                    feedback_id: null,
+                    push_up: false,
+                    parcel: null,
+                    upload_session_id: tempUuid
                 };
+
+                const createRes = await fetch("/api/v2/item_upload/items", { method: "POST", credentials: "include", headers: jsonHeaders, body: JSON.stringify(itemPayload) });
+                if (!createRes.ok) { let t = ""; try { t = await createRes.text(); } catch (e) {} return { success: false, error: `Création article HTTP ${createRes.status}: ${t.substring(0, 200)}` }; }
+                const createData = await createRes.json();
+                const finalItem = createData.item || createData;
+                const finalId = finalItem.id;
+                if (!finalId) return { success: false, error: "Article créé mais ID non retourné" };
+
+                return { success: true, oldId: String(itemId), newId: String(finalId), url: `${window.location.origin}/items/${finalId}` };
             } catch (e) {
                 return { success: false, error: e.message };
             }
-        }
+        },
+        args: [String(itemId), options, original, photosB64, vintedTokens.csrf, vintedTokens.anonId]
     });
-    return injection?.[0]?.result || { success: false, error: "Injection returned null" };
+
+    const result = injection?.[0]?.result;
+    if (!result) throw new Error("L'injection du reposte a renvoyé un résultat vide");
+    if (!result.success) throw new Error(result.error || "Échec inconnu du reposte");
+    return result;
 }
 
 // === MESSAGE HANDLERS ===
@@ -133,9 +405,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(err => sendResponse({ success: false, error: err.message }));
         return true; // Indique une réponse asynchrone
     }
-    // PONT REST API : Lancer un reposte furtif d'un article
+    // PONT REST API : Lancer un reposte furtif d'un article (via contexte page same-origin)
     if (request.action === "repostItemREST") {
-        repostItemREST(request.itemId, request.options || {})
+        (async () => {
+            const optimalTab = await getOptimalVintedTab();
+            if (!optimalTab) throw new Error("Aucun onglet Vinted ouvert pour le reposte.");
+            return repostItemInPage(optimalTab.id, request.itemId, request.options || {});
+        })()
             .then(res => {
                 saveLog(`🔄 Article #${request.itemId} reposté`);
                 sendResponse(res);
@@ -608,7 +884,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 
                 // 4. Pousser ce dump vers le Manager local
                 console.log("🔬 [EXPLORER] Transmission du JSON brut Same-Origin vers le serveur local...");
-                const captureRes = await fetch("http://localhost:3000/api/comptabilite/capture", {
+                const captureBaseUrl = await getManagerApiUrl();
+                const captureUrl = captureBaseUrl.replace(/\/api\/.*$/, "") + "/api/comptabilite/capture";
+                const captureRes = await fetch(captureUrl, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(exploreDump)
@@ -1000,8 +1278,18 @@ async function pollVintedApiRoutine() {
 // === LIKES / NOTIFICATIONS API (Remplace le Ghost Scan) ===
 async function fetchNotificationsAPI(isManual = false) {
     if (!isManual) {
-        const res = await new Promise(resolve => chrome.storage.local.get(['botActive'], resolve));
+        const res = await new Promise(resolve => chrome.storage.local.get(['botActive', 'dmRateLimitUntil'], resolve));
         if (!res.botActive) return;
+
+        // Vérifier si on est encore en pause rate-limit
+        const rateLimitUntil = res.dmRateLimitUntil || 0;
+        const now = Date.now();
+        if (now < rateLimitUntil) {
+            const remainingSec = Math.ceil((rateLimitUntil - now) / 1000);
+            console.log(`⏸️ [API SCAN] Pause rate-limit Vinted — reprise automatique dans ${remainingSec}s`);
+            saveLog(`⏸️ DMs en pause rate-limit (${remainingSec}s restantes)`);
+            return;
+        }
     }
 
     // Anti-doublon / Verrou
@@ -1089,9 +1377,11 @@ async function fetchNotificationsAPI(isManual = false) {
     chrome.storage.local.get(['contactedUsers'], async (result) => {
         const contacted = result.contactedUsers || [];
         let dmSentCount = 0;
+        let rateLimitHit = false; // Dès qu'un 429 est détecté, on stoppe TOUT le scan
         const MAX_DM_PER_SCAN = isManual ? 10 : 2; // 10 en manuel pour la rétroactivité, 2 en routine
 
             for (const notif of notifsData.notifications) {
+                if (rateLimitHit) break;
                 // Types Vinted pour likes : ancien format (ItemFavorited) ou nouveau format API (entry_type 20)
                 const nType = notif.type || notif.action || "";
                 const isLike = (notif.entry_type === 20) || nType === "ItemFavorited" || nType.toLowerCase().includes("favorite") || nType === "bundle_created";
@@ -1259,6 +1549,8 @@ async function fetchNotificationsAPI(isManual = false) {
                                 }
 
                                 // 3. Faire une offre après le message
+                                let capturedOriginalPrice = null;
+                                let capturedOfferPrice = null;
                                 try {
                                     let originalPrice = extractedPrice;
                                     if (!originalPrice || isNaN(originalPrice)) {
@@ -1272,32 +1564,34 @@ async function fetchNotificationsAPI(isManual = false) {
                                             originalPrice = parseFloat(itemObj.price?.amount || itemObj.price);
                                         }
                                     }
-                                    
+
                                     if (!originalPrice || isNaN(originalPrice)) {
-                                        return { success: true, offerError: `Prix introuvable. Clés conv: ${convDetailsKeys}` };
+                                        return { success: true, offerError: `Prix introuvable. Clés conv: ${convDetailsKeys}`, originalPrice: null, offerPrice: null };
                                     }
-                                    
+
                                     let offerPrice = originalPrice - 10;
                                     if (offerPrice < 1) offerPrice = 1;
-                                    
+                                    capturedOriginalPrice = originalPrice;
+                                    capturedOfferPrice = offerPrice;
+
                                     if (!transactionId) {
-                                        return { success: true, offerError: `Transaction introuvable dans la conv.` };
+                                        return { success: true, offerError: `Transaction introuvable dans la conv.`, originalPrice: capturedOriginalPrice, offerPrice: capturedOfferPrice };
                                     }
-                                    
+
                                     await new Promise(r => setTimeout(r, 1000));
-                                    
+
                                     let offerRes = await fetch(`/api/v2/transactions/${transactionId}/offers`, {
                                         method: "POST",
                                         credentials: "include",
                                         headers: headers,
-                                        body: JSON.stringify({ 
-                                            offer: { 
-                                                price: String(offerPrice), 
-                                                currency: "EUR" 
+                                        body: JSON.stringify({
+                                            offer: {
+                                                price: String(offerPrice),
+                                                currency: "EUR"
                                             }
                                         })
                                     });
-                                    
+
                                     const offerText = await offerRes.text();
                                     let hasError = !offerRes.ok;
                                     try {
@@ -1306,15 +1600,15 @@ async function fetchNotificationsAPI(isManual = false) {
                                             hasError = true;
                                         }
                                     } catch (e) {}
-                                    
+
                                     if (hasError) {
-                                        return { success: true, offerError: `Offre API: HTTP ${offerRes.status} - ${offerText.substring(0, 100)}` };
+                                        return { success: true, offerError: `Offre API: HTTP ${offerRes.status} - ${offerText.substring(0, 100)}`, originalPrice: capturedOriginalPrice, offerPrice: capturedOfferPrice };
                                     }
                                 } catch (offerError) {
-                                    return { success: true, offerError: `Exception: ${offerError.message}` };
+                                    return { success: true, offerError: `Exception: ${offerError.message}`, originalPrice: capturedOriginalPrice, offerPrice: capturedOfferPrice };
                                 }
 
-                                return { success: true };
+                                return { success: true, originalPrice: capturedOriginalPrice, offerPrice: capturedOfferPrice };
                             }
                             return { error: "No convId" };
                         } catch (e) {
@@ -1335,17 +1629,44 @@ async function fetchNotificationsAPI(isManual = false) {
                     } else {
                         saveLog(`⭐ DM + Offre envoyés à ${username}`);
                     }
+                    saveDmFavoriEvent({
+                        buyerUsername: username,
+                        itemId: String(itemId),
+                        originalPrice: res.originalPrice || null,
+                        offerPrice: res.offerPrice || null,
+                        status: res.offerError ? 'OFFER_FAILED' : 'SENT',
+                        errorMessage: res.offerError || null
+                    });
                     dmSentCount++;
                 } else if (res && res.error) {
                     console.error(`❌ [API SCAN] Erreur DM pour ${username} sur item #${itemId}:`, res.error);
                     saveLog(`❌ Erreur DM ${username} : ${res.error.substring(0, 50)}`);
+                    saveDmFavoriEvent({
+                        buyerUsername: username,
+                        itemId: String(itemId),
+                        originalPrice: null,
+                        offerPrice: null,
+                        status: 'ERROR',
+                        errorMessage: res.error.substring(0, 100)
+                    });
+                    // Arrêt + mise en pause si Vinted rate-limite
+                    if (res.error.includes("429") || res.error.toLowerCase().includes("rate_limit")) {
+                        const pauseMs = 5 * 60 * 1000; // 5 minutes de pause
+                        const resumeAt = Date.now() + pauseMs;
+                        chrome.storage.local.set({ dmRateLimitUntil: resumeAt });
+                        const resumeTime = new Date(resumeAt).toLocaleTimeString('fr-FR');
+                        console.log(`🛑 [API SCAN] Rate limit Vinted — DMs en pause jusqu'à ${resumeTime}, reprise automatique.`);
+                        saveLog(`🛑 Rate limit — reprise auto à ${resumeTime}`);
+                        rateLimitHit = true; // Stoppe tout le scan, pas seulement l'item courant
+                        break;
+                    }
                 }
 
                 contacted.push(contactKey);
                 chrome.storage.local.set({ contactedUsers: contacted.slice(-300) });
-                
-                // Délai aléatoire (8 à 15 secondes) entre deux DM pour faire très naturel
-                const humanDelay = 8000 + Math.random() * 7000;
+
+                // Délai aléatoire (15 à 30 secondes) entre deux DM pour éviter le rate limit
+                const humanDelay = 15000 + Math.random() * 15000;
                 await new Promise(r => setTimeout(r, humanDelay));
             }
     });
@@ -1399,6 +1720,24 @@ function saveLog(message, type = "INFO") {
 // L'URL est stockée dans chrome.storage pour être configurable.
 // Par défaut : localhost (dev). À changer via le popup ou manuellement.
 const DEFAULT_MANAGER_URL = "https://vinted-manager-flame.vercel.app/api/comptabilite/balance";
+
+function saveDmFavoriEvent(data) {
+    chrome.storage.local.get(['lastDetectedUser', 'managerApiUrl'], (result) => {
+        const botName = result.lastDetectedUser || "system";
+        const configuredUrl = result.managerApiUrl || DEFAULT_MANAGER_URL;
+        let managerUrl;
+        if (configuredUrl.includes("/api/")) {
+            managerUrl = configuredUrl.substring(0, configuredUrl.indexOf("/api/")) + "/api/dm-favoris";
+        } else {
+            managerUrl = configuredUrl.replace(/\/$/, "") + "/api/dm-favoris";
+        }
+        fetch(managerUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ botName, ...data })
+        }).catch(() => {});
+    });
+}
 
 async function getManagerApiUrl() {
     return new Promise((resolve) => {
@@ -1552,9 +1891,6 @@ async function syncAccountBalanceToManager(force = false) {
             const configuredUrl = await getManagerApiUrl();
             const urlsToTry = [];
             
-            if (configuredUrl.includes("vercel.app")) {
-                urlsToTry.push("http://localhost:3000/api/comptabilite/balance");
-            }
             urlsToTry.push(configuredUrl);
 
             let success = false;
@@ -1761,12 +2097,7 @@ async function syncVintedOrdersToManager() {
         const urlsToTry = [];
         
         // En déduire les endpoints orders correspondants
-        if (configuredUrl.includes("vercel.app")) {
-            urlsToTry.push("http://localhost:3000/api/comptabilite/orders");
-            urlsToTry.push(configuredUrl.replace("/balance", "/orders"));
-        } else {
-            urlsToTry.push(configuredUrl.replace("/balance", "/orders"));
-        }
+        urlsToTry.push(configuredUrl.replace("/balance", "/orders"));
 
         let success = false;
         let lastError = null;
@@ -2330,12 +2661,7 @@ async function pollActionQueueFromManager() {
         const configuredUrl = await getManagerApiUrl();
         const urlsToTry = [];
 
-        if (configuredUrl.includes("vercel.app")) {
-            urlsToTry.push(`http://localhost:3000/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`);
-            urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`));
-        } else {
-            urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`));
-        }
+        urlsToTry.push(configuredUrl.replace("/api/comptabilite/balance", `/api/extension/actions?botAccountName=${botName}&vintedAccountId=${botId}`));
 
         let pendingActions = [];
         let activeBaseUrl = "";
@@ -2383,14 +2709,14 @@ async function pollActionQueueFromManager() {
 
                 try {
                     if (action.actionType === "REPOST_ITEM") {
-                        console.log(`🔄 [REPOST] Détection action REPOST_ITEM. Exécution directe dans le service worker...`);
+                        console.log(`🔄 [REPOST] Détection action REPOST_ITEM. Exécution dans le contexte page (same-origin)...`);
 
                         if (action.payload && action.payload.delayBeforeMs && action.payload.delayBeforeMs > 0) {
                             console.log(`⏳ [REPOST] Attente ${action.payload.delayBeforeMs}ms avant le reposte...`);
                             await new Promise(resolve => setTimeout(resolve, action.payload.delayBeforeMs));
                         }
 
-                        const repostResult = await repostItemREST(action.payload.itemId, action.payload);
+                        const repostResult = await repostItemInPage(tabId, action.payload.itemId, action.payload);
                         console.log(`✅ [REPOST] Reposte réussi : ${repostResult.newId}`);
                         success = true;
                     } else if (action.actionType === "DUPLICATE_ITEM") {

@@ -437,6 +437,10 @@ async function repostItemREST(itemId, options = {}) {
     const newPrice = options.newPrice;
     const photoOrder = options.photoOrder;
 
+    // Forcer le rafraîchissement du CSRF et de l'URL de base avant un reposte
+    _csrfCache = { token: null, expiry: 0 };
+    _cachedBaseUrl = null;
+
     // ÉTAPE 1 : Récupérer les détails internes de l'annonce existante
     let itemRes = await vintedFetch(`/api/v2/item_upload/items/${itemId}`);
     if (!itemRes.success) {

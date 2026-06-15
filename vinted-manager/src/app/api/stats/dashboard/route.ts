@@ -8,9 +8,9 @@ export async function GET(request: Request) {
 
     let dateFilterVentes: any = undefined
     let dateFilterCommandes: any = undefined
-    
+
+    const now = new Date()
     if (period !== 'global') {
-      const now = new Date()
       if (period === 'today') {
         const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
         dateFilterVentes = { gte: start }
@@ -20,6 +20,16 @@ export async function GET(request: Request) {
         start.setDate(start.getDate() - 15)
         dateFilterVentes = { gte: start }
         dateFilterCommandes = { gte: start }
+      } else if (period === '30d') {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 30)
+        dateFilterVentes = { gte: start }
+        dateFilterCommandes = { gte: start }
+      } else if (period === '90d') {
+        const start = new Date(now)
+        start.setDate(start.getDate() - 90)
+        dateFilterVentes = { gte: start }
+        dateFilterCommandes = { gte: start }
       } else if (period === 'month') {
         const start = new Date(now.getFullYear(), now.getMonth(), 1)
         dateFilterVentes = { gte: start }
@@ -27,14 +37,25 @@ export async function GET(request: Request) {
       }
     }
 
-    const sevenDaysAgo = new Date()
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-    sevenDaysAgo.setHours(0, 0, 0, 0)
+    // Fenêtre du graphique dynamique selon la période
+    let chartDays = 6
+    if (period === '15d') chartDays = 14
+    else if (period === '30d') chartDays = 29
+    else if (period === '90d') chartDays = 89
+    else if (period === 'month') chartDays = Math.max(0, now.getDate() - 1)
+
+    const chartStartDate = new Date(now)
+    chartStartDate.setDate(chartStartDate.getDate() - chartDays)
+    chartStartDate.setHours(0, 0, 0, 0)
+
     // Parallel metrics fetching for performance
-    const [aggregateSales, aggregateExpenses, stockCount, last7DaysVentes, realAlerts, botStats, botList, commandesAFaireData] = await Promise.all([
-      // 1. Global Sales Statistics
+    const [aggregateSales, aggregateExpenses, stockCount, chartVentes, realAlerts, botStats, botList, commandesAFaireData] = await Promise.all([
+      // 1. Global Sales Statistics (hors annulations)
       prisma.vente.aggregate({
-        where: dateFilterVentes ? { dateVente: dateFilterVentes } : undefined,
+        where: {
+          ...(dateFilterVentes ? { dateVente: dateFilterVentes } : {}),
+          statut: { not: 'ANNULEE' }
+        },
         _sum: {
           prixVente: true,
           beneficeNet: true
@@ -54,9 +75,9 @@ export async function GET(request: Request) {
       prisma.article.count({
         where: { statut: 'STOCK' }
       }),
-      // 4. Dynamic time series data for the UI charts
+      // 4. Dynamic time series data for the UI charts (hors annulations)
       prisma.vente.findMany({
-        where: { dateVente: { gte: sevenDaysAgo } },
+        where: { dateVente: { gte: chartStartDate }, statut: { not: 'ANNULEE' } },
         orderBy: { dateVente: 'desc' },
         select: {
           dateVente: true,
@@ -91,7 +112,6 @@ export async function GET(request: Request) {
     ])
 
     // Calculate dynamic urgency levels for front-end display
-    const now = new Date()
     const alertesExpeditions = realAlerts.map(v => {
       const limit = v.dateLimiteExpedition ? new Date(v.dateLimiteExpedition) : null
       let deadlineStr = 'Non précisé'
@@ -125,20 +145,21 @@ export async function GET(request: Request) {
       }
     })
 
-    // Construct chart data structure (grouped by date format)
+    // Construct chart data structure (grouped by date, window = chartDays + 1 days)
     const salesByDate: Record<string, { displayDate: string, sales: number, profit: number }> = {}
-    
-    // Take current date minus 6 days for the dynamic week layout
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date()
+
+    for (let i = chartDays; i >= 0; i--) {
+      const d = new Date(now)
       d.setDate(d.getDate() - i)
-      const uniqueKey = d.toISOString().split('T')[0] // ex: 2023-10-25
-      const displayKey = d.toLocaleDateString('fr-FR', { weekday: 'short' }) // lun., mar...
+      const uniqueKey = d.toISOString().split('T')[0]
+      const displayKey = chartDays > 6
+        ? d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' })
+        : d.toLocaleDateString('fr-FR', { weekday: 'short' })
       salesByDate[uniqueKey] = { displayDate: displayKey, sales: 0, profit: 0 }
     }
 
     // Fill map with real DB data
-    last7DaysVentes.forEach(v => {
+    chartVentes.forEach(v => {
       const vDate = new Date(v.dateVente)
       const uniqueKey = vDate.toISOString().split('T')[0]
       if (salesByDate[uniqueKey]) {
@@ -177,6 +198,7 @@ export async function GET(request: Request) {
       success: true,
       data: {
         commandesAFaire,
+        chartPeriodDays: chartDays + 1,
         caTotal: Number(aggregateSales._sum.prixVente || 0),
         beneficeTotal: Number(aggregateSales._sum.beneficeNet || 0),
         margeMoyenne: Number(aggregateSales._avg.margePct || 0),

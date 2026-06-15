@@ -178,6 +178,7 @@ model VintedItemMetrics {
   uploadedAtVinted DateTime
   updatedAt        DateTime   @updatedAt
   price            Decimal?   @db.Decimal(10, 2)
+  orderIndex       Int?
   botAccount       BotAccount @relation(fields: [botAccountId], references: [id])
 }
 
@@ -270,6 +271,18 @@ model WhatsappLog {
   status    String
   createdAt DateTime @default(now())
   vente     Vente?   @relation(fields: [venteId], references: [id])
+}
+
+model DmFavoriEvent {
+  id            Int      @id @default(autoincrement())
+  botName       String
+  buyerUsername String
+  itemId        String
+  originalPrice Float?
+  offerPrice    Float?
+  status        String   @default("SENT")
+  errorMessage  String?
+  createdAt     DateTime @default(now())
 }
 
 model PushSubscription {

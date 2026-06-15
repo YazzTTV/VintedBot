@@ -19,7 +19,8 @@ import {
   Boxes,
   Puzzle,
   Shirt,
-  ShieldAlert
+  ShieldAlert,
+  MessageCircleHeart
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import PushToggle from "@/components/PushToggle"
@@ -45,6 +46,7 @@ const navigationGroups = [
     category: 'MESSAGERIE & SAV',
     items: [
       { name: 'Inbox 💬', href: '/inbox', icon: MessageSquare },
+      { name: 'DM Favoris 💌', href: '/dm-favoris', icon: MessageCircleHeart },
       { name: 'SAV & Litiges', href: '/post-sale', icon: ShieldAlert },
     ]
   },

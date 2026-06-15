@@ -73,6 +73,8 @@ export default function Dashboard() {
           >
             <option value="global">Global (Depuis toujours)</option>
             <option value="month">Ce mois-ci</option>
+            <option value="90d">90 derniers jours</option>
+            <option value="30d">30 derniers jours</option>
             <option value="15d">15 derniers jours</option>
             <option value="today">Aujourd'hui</option>
           </select>
@@ -142,7 +144,11 @@ export default function Dashboard() {
           <div className="flex justify-between items-center mb-6">
             <div>
               <h2 className="text-lg font-bold text-white">Évolution des Ventes</h2>
-              <p className="text-xs text-zinc-500 mt-0.5">Les 7 derniers jours glissants</p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {(stats?.chartPeriodDays ?? 7) > 7
+                  ? `Les ${stats.chartPeriodDays} derniers jours`
+                  : 'Les 7 derniers jours glissants'}
+              </p>
             </div>
           </div>
           

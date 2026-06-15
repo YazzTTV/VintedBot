@@ -1,0 +1,125 @@
+# Vinted Manager — Contexte projet (à lire en priorité)
+
+> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-15.
+> Répondre **toujours en français** (préférence utilisateur).
+
+---
+
+## 1. Vue d'ensemble
+
+Le système a **deux composants** qui travaillent ensemble :
+
+1. **`vinted-manager/`** — App **Next.js 16.2.6** (App Router, Turbopack), déployée sur **Vercel**.
+   - URL prod : `https://vinted-manager-flame.vercel.app`
+   - Base de données : **PostgreSQL (Supabase)** via **Prisma v7.8.0**
+   - Sert de tableau de bord : dressing, ventes, comptabilité, dashboard, sourcing, inbox, expéditions.
+
+2. **`vinted-extension/`** — Extension **Chrome Manifest V3** ("Vinted Pro Bot GHOST V4").
+   - C'est elle qui parle à Vinted (l'app Vinted n'a pas d'API publique).
+   - Pousse les données vers le Manager via les routes `/api/extension/*` et `/api/comptabilite/*`.
+   - Fichiers clés : `background.js` (service worker, ~2700 lignes) et `vinted-rest-api.js` (moteur REST).
+
+**Flux** : Extension lit Vinted (injection same-origin) → POST vers le Manager → Manager stocke en base → l'utilisateur consulte le dashboard.
+
+---
+
+## 2. Démarrage / déploiement
+
+- **Déployer le Manager** : depuis `vinted-manager/`, `vercel --prod` (CLI installée, projet lié dans `.vercel/`).
+- **Build** : `package.json` → `"build": "prisma db push && prisma generate && next build"` (pas de fichiers de migration ; `db push` synchronise le schéma).
+- **Recharger l'extension** : `chrome://extensions` → bouton ↻. **Toute modif de `background.js` / `vinted-rest-api.js` exige un rechargement de l'extension** (pas de déploiement).
+- Naviguateur de l'utilisateur : **Brave** (Chromium). Un onglet Vinted **connecté** doit être ouvert pour que l'extension fonctionne.
+
+---
+
+## 3. Authentification & routing (piège connu)
+
+- Next.js 16.2 utilise **`src/proxy.ts`** comme middleware (nouveau nom remplaçant `middleware.ts`). **NE PAS créer `middleware.ts`** en plus → erreur de build "Both middleware file and proxy file detected".
+- `proxy.ts` : toutes les routes `/api/*` sont **publiques** (l'extension appelle depuis vinted.fr, sans cookie de session). Seules les **pages UI** exigent le cookie `app_auth_session`.
+- Login : `/api/auth/login`, mot de passe via `process.env.APP_PASSWORD` (fallback `vinted2026`).
+
+---
+
+## 4. Modèles Prisma importants
+
+- **`VintedItemMetrics`** — articles du dressing. Champs clés : `id` (item id Vinted), `status` (string normalisé : `Vendu` / `Masqué` / `Brouillon` / `Réservé` / `Actif`), `orderIndex Int?` (ordre d'affichage), `viewCount`, `favouriteCount`, `isWinner`.
+- **`VintedOrderSynced`** — commandes Vinted. `itemId String?` (id article Vinted), `articleId String?` (id article manager, lien réconciliation conservé entre upserts), `status`.
+- **`Vente`** — ventes côté manager. Enum `StatutVente` inclut `ANNULEE`, `EXPEDIEE`, `EN_ATTENTE`, `COMMANDE_A_FAIRE`, etc.
+- **`BotAccount`** — compte Vinted (clé : `vintedAccountId`). `name` = base du username (avant `.`/`_`).
+
+---
+
+## 5. Synchronisations (toutes dans `background.js`)
+
+| Fonction | Rôle | Endpoint Vinted lu | Route Manager |
+|---|---|---|---|
+| `syncVintedItemMetricsToManager` | Dressing | `/api/v2/wardrobe/{userId}/items`, `/item_upload/drafts`, `/my_orders` | `/api/extension/sync/metrics` |
+| `syncVintedOrdersToManager` | Ventes | `/api/v2/my_orders?type=sold&status=all` | `/api/comptabilite/orders` |
+| `syncAccountBalanceToManager` | Solde wallet | scrape DOM `/wallet/balance` | `/api/comptabilite/balance` |
+| `syncVintedInboxToManager` | Messagerie | `/api/v2/conversations` | `/api/extension/sync/inbox` |
+| `pollActionQueueFromManager` | File d'actions (repost, etc.) | — | `/api/extension/actions` |
+
+`getManagerApiUrl()` → `DEFAULT_MANAGER_URL = https://vinted-manager-flame.vercel.app/api/comptabilite/balance` (l'extension dérive les autres URLs à partir de celle-ci).
+
+---
+
+## 6. ⚡ Connaissances API Vinted (durement acquises — CRUCIAL)
+
+Vinted n'a pas d'API publique. On utilise l'API privée `/api/v2/*` par injection. **Règles essentielles :**
+
+1. **Origin / same-origin** : les endpoints sensibles (upload photo, création article) **REJETTENT** les requêtes du service worker (`Origin: chrome-extension://` → `403 access_denied`). Il faut les exécuter **dans le contexte de la page** via `chrome.scripting.executeScript({ world: "MAIN" })`. Les GET simples passent depuis le SW.
+2. **CDN images** (`images*.vinted.net`) : accessible **depuis le SW** (host_permissions) mais **bloqué par CORS depuis la page**. → Pour le repost : on **télécharge/traite les images dans le SW**, on les passe en base64 à la page, qui les **uploade en same-origin**. (architecture hybride)
+3. **Tokens** : `x-csrf-token` + `x-anon-id`. Capturés via un listener **`webRequest.onBeforeSendHeaders`** sur `*://*.vinted.*/api/*` (variable `vintedTokens` en haut de `background.js`) → plus fiable que le scraping du meta tag. Fallback meta tag + cookie `anon_id`.
+4. **`X-Money-Object: true`** : quand cet en-tête est envoyé, Vinted renvoie le **prix comme objet** `{amount: "X.XX", currency}` au lieu d'un nombre. → toujours extraire `price.amount` (sinon `parseFloat(objet)` = `NaN`).
+5. **`my_orders` ne contient PAS d'`item_id`** ! Clés réelles : `conversation_id, transaction_id, title, price, status, date, photo, photo_url, transaction_user_status`. Pour avoir l'`item_id` d'une vente → consulter `/api/v2/transactions/{transaction_id}`. On **cache** ces résolutions (`txItemCache` dans chrome.storage, lien `transaction_id → item_id` immuable).
+6. **Anti-bot / rate limit** : code `106` (`rate_limit_exceeded` ou `access_denied`). Vinted flague l'automatisation au-delà de **~2-3 actions/min**. Quand un `429` survient sur les DM → on met en pause 5 min (`dmRateLimitUntil`) et on stoppe tout le scan (flag `rateLimitHit`). Garder des **délais humains** (1,5-2,5 s) entre actions d'écriture.
+7. **Ordre du dressing** : l'API wardrobe renvoie l'ordre du closet (tient compte des **bumps/remontées**). **NE PAS re-trier par date de création** (ça casse l'ordre). Garder l'ordre natif. `order=relevance` est algorithmique → peut varier.
+
+---
+
+## 7. 🔄 Fonction REPOST (republication) — `repostItemInPage(tabId, itemId, options)`
+
+C'est la fonction la plus délicate. Workflow (aligné sur le userscript de référence `lo-bi/vintedRelister` qui fonctionne) :
+
+1. **SW** : lit l'article (`/api/v2/item_upload/items/{id}`, fallback `/items/{id}`), télécharge chaque photo du CDN, applique rognage (`cropImageOffscreen`, défaut 20% ou anti-hash 1px), convertit en data URL base64.
+2. **Page (MAIN world)** : pour chaque photo, reconstruit le Blob et POST `/api/v2/photos` (multipart : `photo[type]=item`, `photo[temp_uuid]`, `photo[file]`). **Un SEUL `temp_uuid` partagé** entre toutes les photos ET la création article (sinon photos orphelines/refusées). Headers upload : `x-csrf-token`, `x-anon-id`, `x-enable-multiple-size-groups: true` (PAS de `X-Money-Object`).
+3. Supprime l'ancien article (`/api/v2/items/{id}/delete` puis fallback `DELETE`).
+4. Crée le nouvel article en **un seul appel** `POST /api/v2/item_upload/items` avec `{ item: {...}, upload_session_id: tempUuid }` (PAS le flux drafts+completion).
+
+Déclenché par une action `REPOST_ITEM` dans la file (`pollActionQueueFromManager`) ou le message `repostItemREST`. ✅ **Fonctionne** (testé : "Chapelet rome" → nouvel id 9180485592).
+
+L'ancienne fonction `repostItemREST` dans `vinted-rest-api.js` (tout en SW) est **obsolète** (gardée mais inutilisée) — elle échouait au `403` upload photo.
+
+---
+
+## 8. État au 2026-06-15 (où on en est)
+
+### ✅ Fait et validé
+- **Repost** : entièrement fonctionnel (architecture hybride SW+page, temp_uuid unique, endpoint item_upload/items, extraction prix objet).
+- **Auth/proxy** : `proxy.ts` corrigé, API publiques, plus de 401 sur `/api/ventes/[id]`.
+- **Rate limit DM** : pause 5 min + arrêt complet du scan au premier 429.
+- **Dashboard** : périodes 7j/15j/30j/90j + graphique dynamique, CA/bénéfice **excluent les `ANNULEE`**.
+- **Détection auto annulations** : `comptabilite/orders` passe la `Vente` liée en `ANNULEE` + push (via `articleId` conservé).
+- **Badges dressing** : badge statut sur chaque carte (Vendu/Masqué/Brouillon/Réservé/En ligne).
+
+### 🟡 En cours / à valider au prochain test
+- **Dressing — détection des vendus** : `my_orders` n'a pas d'`item_id` → résolution via `/transactions/{id}` + **cache `txItemCache`**. Au dernier test : 30/34 détectés ; le cache + résolution de toutes les transactions doit maintenant capter les 34. **À confirmer** par l'utilisateur (regarder le log `🧾 my_orders: HTTP … · X cmd · Y tx · Z match`).
+- **Dressing — ordre** : tri par date supprimé, retour à l'**ordre natif wardrobe**. À confirmer qu'il matche le closet. **Si toujours faux → proposer un sélecteur de tri** (Récents/Anciens/Prix) dans `src/app/dressing/page.tsx` pour un ordre déterministe côté manager.
+
+### Diagnostic dressing dans les logs d'activité
+La synchro dressing logge :
+```
+📊 N articles lus — V vendu(s) détecté(s)
+🧾 my_orders: HTTP 200 · 34 cmd · X tx · Y match au dressing
+```
++ console : `clés commande: …` (structure réelle d'un objet my_orders).
+
+---
+
+## 9. Pièges à retenir
+
+- **Toujours `node --check background.js`** après édition de l'extension (gros fichier, facile de casser une accolade).
+- Fonctions injectées via `executeScript` : **self-contained** (pas de référence au scope externe), args **JSON-sérialisables** (pas de Blob → passer en base64/dataURL).
+- `created_at_ts` (wardrobe) est en **secondes** (× 1000 pour Date). Souvent absent sur drafts/sold → fallback `new Date()`.
+- Le prix Vinted doit être **≥ 1.0 €** (sinon `validation_error`).
+- Répondre **en français**.

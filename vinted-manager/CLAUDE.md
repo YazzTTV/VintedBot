@@ -1,1 +1,2 @@
 @AGENTS.md
+@VINTED_MANAGER.md

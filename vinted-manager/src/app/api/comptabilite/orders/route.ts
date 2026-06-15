@@ -147,6 +147,31 @@ export async function POST(request: Request) {
         })
 
         // ==========================================
+        // DÉTECTION AUTO DES ANNULATIONS VINTED
+        // ==========================================
+        const CANCELLED_STATUSES = ['cancelled', 'canceled', 'annulé', 'annulée', 'returned', 'dispute', 'refund']
+        if (CANCELLED_STATUSES.some(s => syncedOrder.status.toLowerCase().includes(s))) {
+          if (syncedOrder.articleId) {
+            const linkedVente = await prisma.vente.findUnique({
+              where: { articleId: syncedOrder.articleId }
+            })
+            if (linkedVente && linkedVente.statut !== 'ANNULEE') {
+              await prisma.vente.update({
+                where: { id: linkedVente.id },
+                data: { statut: 'ANNULEE' }
+              })
+              console.log(`🚫 [AUTO-ANNULATION] Vente ${linkedVente.id} marquée ANNULEE (${syncedOrder.title})`)
+              await sendPush({
+                title: '🚫 Commande annulée',
+                body: `${syncedOrder.title} — ${syncedOrder.buyerLogin || 'Inconnu'}`,
+                url: '/ventes',
+                tag: 'cancellation'
+              })
+            }
+          }
+        }
+
+        // ==========================================
         // AUTO-RÉCONCILIATION & CRÉATION DE VENTE (Priorités en cascade)
         // ==========================================
         if (!syncedOrder.articleId && !["cancelled", "Supprimé", "canceled"].includes(syncedOrder.status.toLowerCase())) {

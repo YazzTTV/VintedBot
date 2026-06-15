@@ -640,7 +640,11 @@ export default function VentesPage() {
                     <td className="px-3 py-4 text-center">
                       <div className="flex flex-col items-center gap-1.5 justify-center">
                          {/* Statut Vinted */}
-                         {v.statut === 'EXPEDIEE' ? (
+                         {v.statut === 'ANNULEE' ? (
+                           <span className="text-[10px] font-bold text-zinc-400 bg-zinc-800/60 border border-zinc-700/50 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
+                             Annulée
+                           </span>
+                         ) : v.statut === 'EXPEDIEE' ? (
                            <span className="text-[10px] font-bold text-blue-400 bg-blue-500/10 border border-blue-500/20 px-2.5 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
                              Expédiée
                            </span>
