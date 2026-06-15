@@ -81,15 +81,23 @@ export async function POST(request: Request) {
       let isWinner = existingWinnerMap.has(id) || false
       let winnerReason: string | null = existingWinnerMap.get(id) || null
 
+      let finalStatus = status?.toString() || 'Actif';
+      const isSoldStatus = ['sold', 'vendu', 'verkocht', 'venduto'].some(s => 
+        finalStatus.toLowerCase().includes(s)
+      );
+
+      if (isSoldStatus) {
+        finalStatus = 'Vendu';
+      } else if (finalStatus.toLowerCase() === 'hidden' || finalStatus.toLowerCase() === 'masqué') {
+        finalStatus = 'Masqué';
+      } else if (finalStatus.toLowerCase() === 'draft' || finalStatus.toLowerCase() === 'brouillon') {
+        finalStatus = 'Brouillon';
+      }
+
       // LOGIQUE DES WINNERS (Evaluation uniquement si pas déjà winner et dans les premières 24h)
       if (!isWinner && isWithin24h) {
         // Condition A : Vente Rapide
-        // Vinted API renvoie généralement "sold" ou un statut similaire. On teste plusieurs chaînes standard.
-        const isSold = ['sold', 'vendu', 'verkocht', 'venduto'].some(s => 
-          status?.toString().toLowerCase().includes(s)
-        )
-
-        if (isSold) {
+        if (finalStatus === 'Vendu') {
           isWinner = true
           winnerReason = 'VENTE_RAPIDE'
         }
@@ -137,7 +145,7 @@ export async function POST(request: Request) {
           photoUrl,
           viewCount: views,
           favouriteCount: likes,
-          status: status?.toString() || 'Actif',
+          status: finalStatus,
           isWinner,
           winnerReason,
           sourcingUrl: sourcingUrl || undefined, // Ne pas écraser par nul si déjà trouvé manuellement
@@ -152,7 +160,7 @@ export async function POST(request: Request) {
           photoUrl,
           viewCount: views,
           favouriteCount: likes,
-          status: status?.toString() || 'Actif',
+          status: finalStatus,
           isWinner,
           winnerReason,
           sourcingUrl,

@@ -2226,6 +2226,8 @@ async function syncVintedItemMetricsToManager() {
                             resolvedStatus = "Masqué";
                         } else if (item.is_draft || item.status_id === 5 || String(resolvedStatus).toLowerCase() === "draft") {
                             resolvedStatus = "Brouillon";
+                        } else if (item.is_sold || item.is_reserved || item.status_id === 3 || item.status_id === 4 || item.status_id === 6 || (item.badge && typeof item.badge.title === 'string' && (item.badge.title.toLowerCase() === "vendu" || item.badge.title.toLowerCase() === "sold" || item.badge.title.toLowerCase() === "verkocht")) || (item.is_closed && (item.item_closing_action === "sold" || item.item_closing_action === "vendu" || item.item_closing_action === "verkocht"))) {
+                            resolvedStatus = "Vendu";
                         }
 
                         return {

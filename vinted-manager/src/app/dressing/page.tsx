@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Loader2,
   Eye,
+  EyeOff,
   Heart,
   Clock,
   Check,
@@ -57,7 +58,7 @@ export default function DressingPage() {
   const [accountsLoading, setAccountsLoading] = useState(true)
   const [items, setItems] = useState<DressingItem[]>([])
   const [searchTerm, setSearchTerm] = useState("")
-  const [activeTab, setActiveTab] = useState<'ACTIF' | 'BROUILLON'>('ACTIF')
+  const [activeTab, setActiveTab] = useState<'ACTIF' | 'BROUILLON' | 'MASQUE' | 'VENDU'>('ACTIF')
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
   const [showDropdown, setShowDropdown] = useState(false)
 
@@ -133,11 +134,23 @@ export default function DressingPage() {
   // Filtrer les annonces par titre et statut
   const filteredItems = useMemo(() => {
     return items.filter(item => {
-      if (item.status === "Supprimé" || item.status === "Vendu") return false;
-      const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase())
-      const isBrouillon = item.status === "Brouillon" || item.status === "Masqué" || item.status?.toLowerCase().includes('hidden') || item.status?.toLowerCase().includes('draft')
-      const matchesTab = activeTab === 'BROUILLON' ? isBrouillon : !isBrouillon
-      return matchesSearch && matchesTab
+      const s = item.status?.toLowerCase() || "";
+      if (s === "supprimé") return false;
+
+      const matchesSearch = item.title.toLowerCase().includes(searchTerm.toLowerCase());
+      if (!matchesSearch) return false;
+
+      const isVendu = s === "vendu" || s === "sold" || s === "venduto" || s === "verkocht";
+      const isMasque = s === "masqué" || s === "hidden";
+      const isBrouillon = s === "brouillon" || s === "draft";
+      const isActif = !isVendu && !isMasque && !isBrouillon;
+
+      if (activeTab === 'ACTIF') return isActif;
+      if (activeTab === 'BROUILLON') return isBrouillon;
+      if (activeTab === 'MASQUE') return isMasque;
+      if (activeTab === 'VENDU') return isVendu;
+
+      return false;
     })
   }, [items, searchTerm, activeTab])
 
@@ -383,11 +396,11 @@ export default function DressingPage() {
               />
             </div>
 
-            <div className="flex bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-1">
+            <div className="flex bg-zinc-900/50 border border-zinc-800/80 rounded-xl p-1 overflow-x-auto hide-scrollbar">
               <button
                 onClick={() => setActiveTab('ACTIF')}
                 className={cn(
-                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors",
+                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap",
                   activeTab === 'ACTIF' ? "bg-emerald-600 text-white shadow" : "text-zinc-400 hover:text-white"
                 )}
               >
@@ -396,11 +409,29 @@ export default function DressingPage() {
               <button
                 onClick={() => setActiveTab('BROUILLON')}
                 className={cn(
-                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors",
+                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap",
                   activeTab === 'BROUILLON' ? "bg-emerald-600 text-white shadow" : "text-zinc-400 hover:text-white"
                 )}
               >
                 Brouillons
+              </button>
+              <button
+                onClick={() => setActiveTab('MASQUE')}
+                className={cn(
+                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap",
+                  activeTab === 'MASQUE' ? "bg-emerald-600 text-white shadow" : "text-zinc-400 hover:text-white"
+                )}
+              >
+                Masqués
+              </button>
+              <button
+                onClick={() => setActiveTab('VENDU')}
+                className={cn(
+                  "px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap",
+                  activeTab === 'VENDU' ? "bg-emerald-600 text-white shadow" : "text-zinc-400 hover:text-white"
+                )}
+              >
+                Vendus
               </button>
             </div>
           </div>
@@ -480,6 +511,18 @@ export default function DressingPage() {
                   {/* Selection highlight */}
                   {selectedItems.has(item.id) && (
                     <div className="absolute inset-0 bg-emerald-500/20 border-2 border-emerald-500/50 z-0" />
+                  )}
+
+                  {/* Status Badges */}
+                  {(item.status?.toLowerCase() === "masqué" || item.status?.toLowerCase() === "hidden") && (
+                    <div className="absolute top-2 left-2 px-2 py-1 bg-zinc-900/80 backdrop-blur-sm border border-zinc-700 text-zinc-300 text-[10px] font-bold rounded-md z-10 flex items-center gap-1">
+                      <EyeOff className="w-3 h-3" /> Masqué
+                    </div>
+                  )}
+                  {(item.status?.toLowerCase() === "vendu" || item.status?.toLowerCase() === "sold" || item.status?.toLowerCase() === "venduto" || item.status?.toLowerCase() === "verkocht") && (
+                    <div className="absolute top-2 left-2 px-2 py-1 bg-rose-900/80 backdrop-blur-sm border border-rose-700 text-rose-200 text-[10px] font-bold rounded-md z-10 flex items-center gap-1">
+                      <Check className="w-3 h-3" /> Vendu
+                    </div>
                   )}
 
                   {/* Hover Buttons */}
