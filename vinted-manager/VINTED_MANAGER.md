@@ -1,6 +1,6 @@
 # Vinted Manager — Contexte projet (à lire en priorité)
 
-> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-15.
+> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-16.
 > Répondre **toujours en français** (préférence utilisateur).
 >
 > **⚠️ Repo partagé avec un autre dev.** GitHub `https://github.com/YazzTTV/VintedBot` (branche `main`).
@@ -125,11 +125,13 @@ L'ancienne fonction `repostItemREST` dans `vinted-rest-api.js` (tout en SW) est 
 
 ---
 
-## 10. Dernière synchro Git + Vercel (2026-06-15)
+## 10. Dernière synchro Git + Vercel (2026-06-16)
 
-- **GitHub `main`** = notre version complète. Commit `a434f9f` *"feat: republication (repost), DM Favoris, dashboard periods, proxy fix"* poussé en fast-forward au-dessus du commit `5701f14` de l'autre dev (le fix dressing).
-- **Vercel prod** = redéployé depuis le local (`vercel --prod`), alias `https://vinted-manager-flame.vercel.app` → READY. `prisma db push` : base déjà en sync (DmFavoriEvent + orderIndex déjà présents). DM Favoris de nouveau en ligne.
+- **GitHub `main`** = HEAD `2eadc13` *"feat: suivi temps reel repost + panneau activite DM favoris"*. Historique récent : `2eadc13` (suivi repost + panneau DM) → `e318406` (repost multi-sélection) → `0d1bee2` (autre dev : notifications ventes, page network/logs, sync inbox enrichie, pullé en fast-forward) → `a434f9f` (repost, DM Favoris, dashboard periods, proxy fix).
+- **Vercel prod** = redéployé depuis le local (`vercel --prod --yes`), alias `https://vinted-manager-flame.vercel.app` → READY (dernier `dpl_2S1md8...`).
 - ⚠️ **Le déploiement vient du LOCAL, pas de GitHub.** Si l'autre dev redéploie depuis sa machine, il peut écraser. Toujours vérifier `git fetch` + l'état du local avant de redéployer.
+- **Note dépendances** : le pull `0d1bee2` a ajouté `sonner` + `react-force-graph-2d` au `package.json` (non installés en local → erreurs tsc `Cannot find module` côté `layout.tsx`/`NetworkGraph.tsx`/`GlobalNotificationSystem.tsx`, inoffensives car le build Vercel fait `npm install`). Lancer `npm install` en local si besoin de dev.
+- **Extension** : `background.js` modifié (log détection DM `🔍 X favoris détectés · X à DM`) → **recharger l'extension** (`chrome://extensions` → ↻) pour l'activer. Le suivi repost côté Manager ne nécessite aucun rechargement.
 
 ---
 
