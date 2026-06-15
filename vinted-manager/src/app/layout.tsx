@@ -5,6 +5,8 @@ import "./globals.css";
 import DashboardLayout from "@/components/DashboardLayout";
 import { DiagnosticProvider } from "@/context/DiagnosticContext";
 import { DiagnosticConsole } from "@/components/DiagnosticConsole";
+import { Toaster } from "sonner";
+import GlobalNotificationSystem from "@/components/GlobalNotificationSystem";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -50,6 +52,8 @@ export default function RootLayout({
             {children}
           </DashboardLayout>
           <DiagnosticConsole />
+          <Toaster theme="dark" position="top-right" />
+          <GlobalNotificationSystem />
         </DiagnosticProvider>
       </body>
     </html>

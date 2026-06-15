@@ -20,7 +20,9 @@ import {
   Puzzle,
   Shirt,
   ShieldAlert,
-  MessageCircleHeart
+  MessageCircleHeart,
+  Network,
+  Terminal
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import PushToggle from "@/components/PushToggle"
@@ -65,6 +67,13 @@ const navigationGroups = [
       { name: 'Sourcing', href: '/sourcing', icon: Search },
       { name: 'Extension 🧩', href: '/extension', icon: Puzzle },
     ]
+  },
+  {
+    category: 'SYSTÈME & OBSERVABILITÉ',
+    items: [
+      { name: 'Network 🌌', href: '/network', icon: Network },
+      { name: 'Système Logs 📋', href: '/logs', icon: Terminal },
+    ]
   }
 ]
 
@@ -100,10 +109,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
         </div>
 
-        <nav className="flex-1 px-3 py-6 space-y-6 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
+        <nav className="flex-1 px-3 py-4 space-y-4 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
           {navigationGroups.map((group) => (
-            <div key={group.category} className="space-y-1">
-              <h3 className="px-3 text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-2">
+            <div key={group.category} className="space-y-0.5">
+              <h3 className="px-3 text-[11px] font-bold uppercase tracking-wider text-zinc-500 mb-1">
                 {group.category}
               </h3>
               {group.items.map((item) => {
@@ -113,7 +122,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     key={item.name}
                     href={item.href}
                     className={cn(
-                      "flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-all duration-200 ease-out relative overflow-hidden group",
+                      "flex items-center gap-3 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ease-out relative overflow-hidden group",
                       isActive 
                         ? "bg-zinc-900 text-emerald-400 shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]" 
                         : "text-zinc-400 hover:text-white hover:bg-zinc-900/50"

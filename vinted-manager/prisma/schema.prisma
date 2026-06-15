@@ -232,6 +232,7 @@ model ExtensionLog {
   botName      String
   message      String
   type         String      @default("INFO")
+  source       String      @default("EXTENSION")
   createdAt    DateTime    @default(now())
   botAccount   BotAccount? @relation(fields: [botAccountId], references: [id], onDelete: Cascade)
 }

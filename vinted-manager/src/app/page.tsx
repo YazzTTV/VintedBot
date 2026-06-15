@@ -124,14 +124,14 @@ export default function Dashboard() {
         />
         <KPICard 
           title="Vinted Disponible" 
-          value={loading ? "..." : `${Number(stats?.totalWalletAvailable || 0).toFixed(2)} €`}
+          value={loading ? "..." : `${Number(stats?.totalWalletPending || 0).toFixed(2)} €`}
           trend="Fonds transférables" 
           icon={Wallet}
           positive={true}
         />
         <KPICard 
           title="Vinted En Attente" 
-          value={loading ? "..." : `${Number(stats?.totalWalletPending || 0).toFixed(2)} €`}
+          value={loading ? "..." : `${Number(stats?.totalWalletAvailable || 0).toFixed(2)} €`}
           trend="Transactions en cours" 
           icon={ShoppingBag}
           positive={null}
@@ -329,11 +329,11 @@ export default function Dashboard() {
                   <div className="grid grid-cols-2 gap-2 bg-zinc-950/40 border border-zinc-800/30 rounded-lg p-2 mb-3">
                     <div>
                       <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-0.5">Dispo</p>
-                      <p className="text-sm font-extrabold text-emerald-400">{Number(bot.balanceAvailable || 0).toFixed(2)} €</p>
+                      <p className="text-sm font-extrabold text-emerald-400">{Number(bot.balancePending || 0).toFixed(2)} €</p>
                     </div>
                     <div className="border-l border-zinc-800/50 pl-2">
                       <p className="text-[9px] font-bold uppercase tracking-wider text-zinc-500 mb-0.5">Attente</p>
-                      <p className="text-sm font-extrabold text-amber-400">{Number(bot.balancePending || 0).toFixed(2)} €</p>
+                      <p className="text-sm font-extrabold text-amber-400">{Number(bot.balanceAvailable || 0).toFixed(2)} €</p>
                     </div>
                   </div>
 

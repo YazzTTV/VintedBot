@@ -2330,14 +2330,74 @@ const cachedTime = cache[idStr];
                                 }
                             }
 
-                            const itemId = details.item ? String(details.item.id) : null;
-                            const title = details.item ? details.item.title : null;
+                            let itemId = (details.item && details.item.id) 
+                                ? String(details.item.id) 
+                                : (details.transaction && details.transaction.item_id) 
+                                    ? String(details.transaction.item_id) 
+                                    : (details.item_id)
+                                        ? String(details.item_id)
+                                        : (details.transaction && details.transaction.order && details.transaction.order.items && details.transaction.order.items[0])
+                                            ? String(details.transaction.order.items[0].id)
+                                            : null;
+                                    
+                            const title = (details.item_title) 
+                                ? details.item_title
+                                : (details.item && details.item.title) 
+                                    ? details.item.title 
+                                    : (details.transaction && (details.transaction.item_title || details.transaction.title)) 
+                                        ? (details.transaction.item_title || details.transaction.title)
+                                        : (details.transaction && details.transaction.order && details.transaction.order.title)
+                                            ? details.transaction.order.title
+                                            : (details.transaction && details.transaction.order && details.transaction.order.items && details.transaction.order.items[0])
+                                                ? details.transaction.order.items[0].title
+                                                : (details.subtitle && !details.subtitle.match(/^(\d+)[.,]?(\d*)\s*€$/))
+                                                    ? details.subtitle
+                                                    : null;
+
+                            // Extraction ultime de l'itemId via les messages si toujours introuvable
+                            if (!itemId && details.messages && details.messages.length > 0) {
+                                for (const m of details.messages) {
+                                    if (m.item_id) {
+                                        itemId = String(m.item_id);
+                                        break;
+                                    }
+                                    if (m.entity) {
+                                        if (m.entity.item_id) {
+                                            itemId = String(m.entity.item_id);
+                                            break;
+                                        }
+                                        const url = m.entity.action_url || m.entity.url || "";
+                                        const urlMatch = url.match(/(?:\/items\/|item\/)(\d+)/);
+                                        if (urlMatch) {
+                                            itemId = String(urlMatch[1]);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Si le titre est introuvable ou ressemble à un simple prix, mais qu'on a l'itemId,
+                            // on va chercher l'article directement sur l'API Vinted !
+                            let finalTitle = title || thread.title || thread.description || "Discussion Vinted";
+                            if (itemId && (!title || finalTitle.match(/^(\d+)[.,]?(\d*)\s*€$/))) {
+                                try {
+                                    const itemRes = await fetch(`/api/v2/items/${itemId}`, { credentials: "include", headers });
+                                    if (itemRes.ok) {
+                                        const itemData = await itemRes.json();
+                                        if (itemData && itemData.item && itemData.item.title) {
+                                            finalTitle = itemData.item.title;
+                                        }
+                                    }
+                                } catch(e) {
+                                    console.warn("Impossible de fetch le titre de l'item", itemId);
+                                }
+                            }
 
                             enrichedConversations.push({
                                 id: String(thread.id),
                                 buyerUsername: thread.opposite_user ? thread.opposite_user.login : "Acheteur Inconnu",
                                 buyerPhoto: thread.opposite_user?.photo?.url || thread.opposite_user?.photo?.thumbnails?.[0]?.url || null,
-                                title: title || thread.description || "Discussion Vinted",
+                                title: finalTitle,
                                 itemId: itemId || null,
                                 lastMessage: thread.description || "",
                                 lastMessageTime: thread.updated_at || new Date().toISOString(),
