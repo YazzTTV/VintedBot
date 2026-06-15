@@ -3,12 +3,59 @@ import prisma from '@/lib/prisma'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 }
 
 export async function OPTIONS() {
   return NextResponse.json({}, { headers: corsHeaders })
+}
+
+// 📊 GET : suivi en temps réel de l'avancement d'un lot de reposts (lecture seule)
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const idsParam = searchParams.get('ids')
+
+    if (!idsParam) {
+      return NextResponse.json(
+        { success: false, error: "Paramètre ids requis (liste séparée par des virgules)" },
+        { status: 400, headers: corsHeaders }
+      )
+    }
+
+    const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean)
+
+    const actions = await prisma.botActionQueue.findMany({
+      where: { id: { in: ids }, actionType: 'REPOST_ITEM' },
+      select: { id: true, status: true, completedAt: true, errorMessage: true, payload: true }
+    })
+
+    // Préserver l'ordre demandé par le client
+    const byId = new Map(actions.map(a => [a.id, a]))
+    const result = ids.map(id => {
+      const a = byId.get(id)
+      if (!a) return { id, status: 'UNKNOWN', completedAt: null, errorMessage: null, itemId: null, delayBeforeMs: 0 }
+      const payload = (a.payload || {}) as Record<string, any>
+      return {
+        id: a.id,
+        status: a.status,
+        completedAt: a.completedAt,
+        errorMessage: a.errorMessage,
+        itemId: payload.itemId ?? null,
+        delayBeforeMs: payload.delayBeforeMs ?? 0
+      }
+    })
+
+    return NextResponse.json({ success: true, actions: result }, { headers: corsHeaders })
+
+  } catch (error: any) {
+    console.error('Repost status fetch failure:', error)
+    return NextResponse.json(
+      { success: false, error: error.message },
+      { status: 500, headers: corsHeaders }
+    )
+  }
 }
 
 export async function POST(request: Request) {

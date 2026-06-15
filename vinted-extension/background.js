@@ -1380,6 +1380,31 @@ async function fetchNotificationsAPI(isManual = false) {
         let rateLimitHit = false; // Dès qu'un 429 est détecté, on stoppe TOUT le scan
         const MAX_DM_PER_SCAN = isManual ? 10 : 2; // 10 en manuel pour la rétroactivité, 2 en routine
 
+        // Pré-comptage (lecture seule) pour le panneau d'activité du Manager
+        let likesDetected = 0;
+        let newToDm = 0;
+        for (const notif of notifsData.notifications) {
+            const t = notif.type || notif.action || "";
+            const like = (notif.entry_type === 20) || t === "ItemFavorited" || t.toLowerCase().includes("favorite") || t === "bundle_created";
+            if (!like) continue;
+            let u = null, iid = null;
+            if (notif.entry_type === 20) {
+                if (notif.body) u = notif.body.split(" ")[0];
+                iid = notif.subject_id;
+                if (!iid && notif.link) { const m = notif.link.match(/item_id=(\d+)/); if (m) iid = m[1]; }
+            } else {
+                u = notif.user ? notif.user.login : null;
+                iid = notif.item ? notif.item.id : (notif.subject && notif.subject.id ? notif.subject.id : null);
+            }
+            if (!u || !iid) continue;
+            likesDetected++;
+            if (!contacted.includes(`${u}_${iid}`)) newToDm++;
+        }
+        // On ne logue que s'il y a du nouveau à traiter (évite de spammer le feed)
+        if (newToDm > 0) {
+            saveLog(`🔍 ${likesDetected} favori${likesDetected > 1 ? 's' : ''} détecté${likesDetected > 1 ? 's' : ''} · ${newToDm} à DM`);
+        }
+
             for (const notif of notifsData.notifications) {
                 if (rateLimitHit) break;
                 // Types Vinted pour likes : ancien format (ItemFavorited) ou nouveau format API (entry_type 20)

@@ -51,6 +51,16 @@ interface Toast {
   type: 'success' | 'error'
 }
 
+interface RepostProgressItem {
+  actionId: string
+  itemId: string
+  title: string
+  status: string
+  completedAt: string | null
+  delayBeforeMs: number
+  errorMessage: string | null
+}
+
 export default function DressingPage() {
   const [accounts, setAccounts] = useState<DressingAccount[]>([])
   const [selectedAccount, setSelectedAccount] = useState<string>("")
@@ -69,6 +79,12 @@ export default function DressingPage() {
   const [repostLoading, setRepostLoading] = useState(false)
   const [duplicateLoading, setDuplicateLoading] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
+
+  // Suivi en temps reel de la republication par lot
+  const [repostPhase, setRepostPhase] = useState<'form' | 'running' | 'done'>('form')
+  const [repostProgress, setRepostProgress] = useState<RepostProgressItem[]>([])
+  const [repostActionIds, setRepostActionIds] = useState<string>("")
+  const [now, setNow] = useState(() => Date.now())
 
   const [repostForm, setRepostForm] = useState({
     cropPercent: 0,
@@ -188,6 +204,49 @@ export default function DressingPage() {
 
 
 
+  // Polling de l'avancement pendant la republication
+  useEffect(() => {
+    if (repostPhase !== 'running' || !repostActionIds) return
+    let active = true
+
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/dressing/repost?ids=${encodeURIComponent(repostActionIds)}`)
+        const data = await res.json()
+        if (!active || !data.success) return
+        setRepostProgress(prev => prev.map(p => {
+          const a = data.actions.find((x: any) => x.id === p.actionId)
+          return a ? { ...p, status: a.status, completedAt: a.completedAt, delayBeforeMs: a.delayBeforeMs, errorMessage: a.errorMessage } : p
+        }))
+        const allDone = data.actions.length > 0 && data.actions.every((a: any) => a.status === 'SUCCESS' || a.status === 'FAILED')
+        if (allDone) setRepostPhase('done')
+      } catch (e) {
+        // silencieux, on retentera au prochain tick
+      }
+    }
+
+    tick()
+    const interval = setInterval(tick, 2000)
+    return () => { active = false; clearInterval(interval) }
+  }, [repostPhase, repostActionIds])
+
+  // Horloge pour les comptes a rebours pendant la republication
+  useEffect(() => {
+    if (repostPhase !== 'running') return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [repostPhase])
+
+  const closeRepostModal = () => {
+    setShowRepostModal(false)
+    if (repostPhase === 'done') {
+      setSelectedItems(new Set())
+    }
+    setRepostPhase('form')
+    setRepostProgress([])
+    setRepostActionIds("")
+  }
+
   const handleRepostSubmit = async () => {
     if (selectedItems.size === 0) return
 
@@ -216,18 +275,21 @@ export default function DressingPage() {
       })
 
       const data = await res.json()
-      if (data.success) {
-        showToast(`${selectedItems.size} republications planifiees`, "success")
-        setShowRepostModal(false)
-        setSelectedItems(new Set())
-        setRepostForm({
-          cropPercent: 0,
-          newTitle: "",
-          newDescription: "",
-          newPrice: "",
-          minDelaySec: 80,
-          maxDelaySec: 120
-        })
+      if (data.success && Array.isArray(data.actionIds)) {
+        // Construire le suivi de progression (zip actionIds <-> items envoyes)
+        const progress: RepostProgressItem[] = repostItems.map((it, i) => ({
+          actionId: data.actionIds[i],
+          itemId: it.itemId,
+          title: items.find(x => x.id === it.itemId)?.title || `#${it.itemId}`,
+          status: 'PENDING',
+          completedAt: null,
+          delayBeforeMs: 0,
+          errorMessage: null
+        }))
+        setRepostProgress(progress)
+        setRepostActionIds(data.actionIds.join(','))
+        setNow(Date.now())
+        setRepostPhase('running')
       } else {
         showToast(data.error || "Erreur lors de la republication", "error")
       }
@@ -671,7 +733,7 @@ export default function DressingPage() {
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-blue-500" />
 
             <button
-              onClick={() => setShowRepostModal(false)}
+              onClick={closeRepostModal}
               className="absolute right-4 top-4 p-2 text-zinc-500 hover:text-white transition-colors"
             >
               <X className="w-5 h-5" />
@@ -682,11 +744,18 @@ export default function DressingPage() {
                 <Settings2 className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-xl font-bold text-white">Reposter la Selection</h3>
-                <p className="text-xs text-zinc-500 mt-0.5">{selectedItems.size} annonce{selectedItems.size !== 1 ? 's' : ''} selectionnee{selectedItems.size !== 1 ? 's' : ''}</p>
+                <h3 className="text-xl font-bold text-white">
+                  {repostPhase === 'form' ? "Reposter la Selection" : repostPhase === 'done' ? "Republication terminee" : "Republication en cours"}
+                </h3>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {repostPhase === 'form'
+                    ? `${selectedItems.size} annonce${selectedItems.size !== 1 ? 's' : ''} selectionnee${selectedItems.size !== 1 ? 's' : ''}`
+                    : `${repostProgress.filter(p => p.status === 'SUCCESS' || p.status === 'FAILED').length}/${repostProgress.length} traitee${repostProgress.length !== 1 ? 's' : ''}`}
+                </p>
               </div>
             </div>
 
+            {repostPhase === 'form' && (
             <div className="space-y-4">
               {/* Crop Percent Slider */}
               <div className="space-y-2">
@@ -769,7 +838,7 @@ export default function DressingPage() {
               <div className="pt-4 flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowRepostModal(false)}
+                  onClick={closeRepostModal}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-900 text-zinc-400 text-sm font-medium border border-zinc-800 hover:bg-zinc-800 transition-colors"
                 >
                   Annuler
@@ -791,6 +860,119 @@ export default function DressingPage() {
                 </button>
               </div>
             </div>
+            )}
+
+            {/* Progress view */}
+            {repostPhase !== 'form' && (() => {
+              const doneCount = repostProgress.filter(p => p.status === 'SUCCESS' || p.status === 'FAILED').length
+              const total = repostProgress.length
+              const pct = total > 0 ? Math.round((doneCount / total) * 100) : 0
+              const failedCount = repostProgress.filter(p => p.status === 'FAILED').length
+              const successCount = repostProgress.filter(p => p.status === 'SUCCESS').length
+              const notPicked = repostProgress.every(p => p.status === 'PENDING')
+
+              // Compte a rebours avant le prochain repost
+              const nextIdx = repostProgress.findIndex(p => p.status !== 'SUCCESS' && p.status !== 'FAILED')
+              let countdownSec: number | null = null
+              if (nextIdx > 0) {
+                const prev = repostProgress[nextIdx - 1]
+                if (prev.completedAt) {
+                  const fireAt = new Date(prev.completedAt).getTime() + (repostProgress[nextIdx].delayBeforeMs || 0)
+                  countdownSec = Math.max(0, Math.round((fireAt - now) / 1000))
+                }
+              }
+
+              return (
+                <div className="space-y-5">
+                  {/* Barre de progression */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-medium text-zinc-400">Progression</span>
+                      <span className="font-bold text-white">{doneCount}/{total} · {pct}%</span>
+                    </div>
+                    <div className="w-full h-3 bg-zinc-900 border border-zinc-800 rounded-full overflow-hidden">
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all duration-500",
+                          repostPhase === 'done'
+                            ? (failedCount > 0 ? "bg-amber-500" : "bg-emerald-500")
+                            : "bg-gradient-to-r from-emerald-500 to-blue-500"
+                        )}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Etat global / timer */}
+                  {repostPhase === 'running' ? (
+                    <div className="flex items-center gap-3 p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl">
+                      <Loader2 className="w-4 h-4 animate-spin text-emerald-500 flex-shrink-0" />
+                      <span className="text-sm text-zinc-300">
+                        {notPicked
+                          ? "En attente de l'extension..."
+                          : countdownSec !== null && countdownSec > 0
+                            ? `Prochain repost dans ${countdownSec}s`
+                            : "Repost en cours..."}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className={cn(
+                      "flex items-center gap-3 p-3 rounded-xl border",
+                      failedCount > 0
+                        ? "bg-amber-950/40 border-amber-500/30 text-amber-200"
+                        : "bg-emerald-950/40 border-emerald-500/30 text-emerald-200"
+                    )}>
+                      <Check className="w-4 h-4 flex-shrink-0" />
+                      <span className="text-sm font-medium">
+                        Termine : {successCount} reposte{successCount !== 1 ? 's' : ''}{failedCount > 0 ? `, ${failedCount} en echec` : ''}.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Liste des articles */}
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {repostProgress.map((p, i) => {
+                      const isDone = p.status === 'SUCCESS'
+                      const isFailed = p.status === 'FAILED'
+                      const isCurrent = i === nextIdx
+                      return (
+                        <div key={p.actionId} className="flex items-center gap-3 p-2.5 bg-zinc-900/40 border border-zinc-800/60 rounded-xl">
+                          <div className="flex-shrink-0">
+                            {isDone ? (
+                              <Check className="w-4 h-4 text-emerald-500" />
+                            ) : isFailed ? (
+                              <X className="w-4 h-4 text-rose-500" />
+                            ) : isCurrent && !notPicked ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-emerald-500" />
+                            ) : (
+                              <Clock className="w-4 h-4 text-zinc-600" />
+                            )}
+                          </div>
+                          <span className="text-xs font-medium text-zinc-300 truncate flex-1" title={p.title}>{p.title}</span>
+                          <span className={cn(
+                            "text-[10px] font-bold uppercase tracking-wide flex-shrink-0",
+                            isDone ? "text-emerald-500" : isFailed ? "text-rose-500" : isCurrent && !notPicked ? "text-emerald-400" : "text-zinc-600"
+                          )}>
+                            {isDone ? "Reposte" : isFailed ? "Echec" : isCurrent && !notPicked ? "En cours" : "En attente"}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Bouton fermer (uniquement quand termine) */}
+                  {repostPhase === 'done' && (
+                    <button
+                      type="button"
+                      onClick={closeRepostModal}
+                      className="w-full px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold shadow-lg shadow-emerald-900/20 hover:bg-emerald-500 transition-colors"
+                    >
+                      Fermer
+                    </button>
+                  )}
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}

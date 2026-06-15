@@ -13,6 +13,9 @@ import {
   TrendingUp,
   MessageCircleHeart,
   Tag,
+  Terminal,
+  Radar,
+  Timer,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -25,6 +28,14 @@ type DmEvent = {
   offerPrice: number | null
   status: string
   errorMessage: string | null
+  createdAt: string
+}
+
+type LogEntry = {
+  id: string
+  botName: string
+  message: string
+  type: string
   createdAt: string
 }
 
@@ -52,19 +63,25 @@ export default function DmFavorisPage() {
   const [selectedBot, setSelectedBot] = useState("all")
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [logs, setLogs] = useState<LogEntry[]>([])
+  const [now, setNow] = useState(() => Date.now())
 
   const fetchEvents = useCallback(async (showIndicator = false) => {
     if (showIndicator) setRefreshing(true)
     try {
-      const [eventsRes, botsRes] = await Promise.all([
+      const [eventsRes, botsRes, logsRes] = await Promise.all([
         fetch(`/api/dm-favoris?botName=${selectedBot}`),
         fetch("/api/extension/status"),
+        fetch(`/api/extension/logs?botName=${selectedBot}`),
       ])
       const eventsData = await eventsRes.json()
       if (eventsData.success) setEvents(eventsData.events || [])
 
       const botsData = await botsRes.json()
       if (botsData.success) setBots(botsData.bots || [])
+
+      const logsData = await logsRes.json()
+      if (logsData.success) setLogs(logsData.logs || [])
     } catch (e) {
       console.error(e)
     } finally {
@@ -78,6 +95,44 @@ export default function DmFavorisPage() {
     const interval = setInterval(() => fetchEvents(), 5000)
     return () => clearInterval(interval)
   }, [fetchEvents])
+
+  // Horloge 1s pour les comptes a rebours (rate limit)
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Ne garder que les logs pertinents pour le DM favoris
+  const dmLogs = logs.filter(l => /DM|favori|rate.?limit|pause|détect|detect|⭐|🛑|⏸️/i.test(l.message))
+
+  // Calculer la cible de reprise du rate limit (timestamp ms) a partir des logs
+  const rateLimitTarget: number | null = (() => {
+    for (const l of logs) {
+      // "⏸️ DMs en pause rate-limit (Xs restantes)" → target = createdAt + Xs
+      const m1 = l.message.match(/pause rate-?limit\s*\((\d+)s/i)
+      if (m1) {
+        const target = new Date(l.createdAt).getTime() + parseInt(m1[1], 10) * 1000
+        return target > now ? target : null
+      }
+      // "🛑 Rate limit — reprise auto à HH:MM(:SS)" → target = aujourd'hui a cette heure
+      const m2 = l.message.match(/reprise auto à\s*(\d{1,2}):(\d{2})(?::(\d{2}))?/i)
+      if (m2) {
+        const d = new Date(l.createdAt)
+        d.setHours(parseInt(m2[1], 10), parseInt(m2[2], 10), m2[3] ? parseInt(m2[3], 10) : 0, 0)
+        const target = d.getTime()
+        return target > now ? target : null
+      }
+    }
+    return null
+  })()
+  const rateLimitSec = rateLimitTarget ? Math.max(0, Math.round((rateLimitTarget - now) / 1000)) : null
+
+  const logColor = (type: string, message: string) => {
+    if (type === 'ERROR' || /❌|🛑/.test(message)) return 'text-rose-400'
+    if (type === 'WARNING' || /⏸️|⚠️/.test(message)) return 'text-amber-400'
+    if (type === 'SUCCESS' || /✅|⭐/.test(message)) return 'text-emerald-400'
+    return 'text-zinc-300'
+  }
 
   const handleClear = async () => {
     if (!confirm("Vider tous les événements DM Favoris ?")) return
@@ -148,6 +203,46 @@ export default function DmFavorisPage() {
           <p className="text-3xl font-extrabold text-rose-400">{errors}</p>
         </div>
       </div>
+
+      {/* Live activity panel */}
+      <section className="bg-[#0a0a0a] border border-zinc-800/60 rounded-2xl overflow-hidden shadow-2xl">
+        <div className="flex items-center justify-between gap-4 px-5 py-3 border-b border-zinc-900 bg-zinc-950/60">
+          <div className="flex items-center gap-2">
+            <Terminal className="w-4 h-4 text-emerald-400" />
+            <h2 className="text-sm font-bold text-white font-mono">ACTIVITÉ EN DIRECT</h2>
+            <span className="flex items-center gap-1.5 text-[10px] font-medium text-zinc-500">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              live
+            </span>
+          </div>
+          {rateLimitSec !== null ? (
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold bg-rose-500/10 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg font-mono">
+              <Timer className="w-3.5 h-3.5" />
+              Rate limit · reprise dans {rateLimitSec}s
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-lg">
+              <Radar className="w-3.5 h-3.5" />
+              En attente de détection
+            </span>
+          )}
+        </div>
+        <div className="max-h-72 overflow-y-auto p-4 font-mono text-xs space-y-1.5">
+          {dmLogs.length === 0 ? (
+            <p className="text-zinc-600 py-6 text-center">Aucun événement récent. Le scan tourne en arrière-plan via l'extension…</p>
+          ) : (
+            dmLogs.map((l) => (
+              <div key={l.id} className="flex items-start gap-2 leading-relaxed">
+                <span className="text-zinc-600 flex-shrink-0">
+                  {new Date(l.createdAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </span>
+                <span className="text-zinc-700 flex-shrink-0">›</span>
+                <span className={cn("break-all", logColor(l.type, l.message))}>{l.message}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
 
       {/* Table */}
       <section className="bg-zinc-950 border border-zinc-800/60 rounded-2xl p-6 shadow-2xl">
