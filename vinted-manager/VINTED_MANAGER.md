@@ -2,6 +2,9 @@
 
 > Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-15.
 > Répondre **toujours en français** (préférence utilisateur).
+>
+> **⚠️ Repo partagé avec un autre dev.** GitHub `https://github.com/YazzTTV/VintedBot` (branche `main`).
+> Toujours `git fetch` avant de bosser ; l'autre dev peut avoir poussé. Voir §10 pour le dernier état de synchro.
 
 ---
 
@@ -25,7 +28,8 @@ Le système a **deux composants** qui travaillent ensemble :
 
 ## 2. Démarrage / déploiement
 
-- **Déployer le Manager** : depuis `vinted-manager/`, `vercel --prod` (CLI installée, projet lié dans `.vercel/`).
+- **Déployer le Manager** : depuis `vinted-manager/`, `vercel --prod --yes` (CLI installée v54+, projet lié dans `.vercel/` → `vinted-manager`, compte `huilo1806-5829`). Build distant ~37s. Le déploiement se fait **depuis le local** (pas depuis GitHub) → c'est le local qui fait foi en prod.
+- **Git** : le dossier racine `VintedBot-main/` est un dépôt git lié à `origin = github.com/YazzTTV/VintedBot`. (Au départ c'était un ZIP non versionné ; relié le 2026-06-15.)
 - **Build** : `package.json` → `"build": "prisma db push && prisma generate && next build"` (pas de fichiers de migration ; `db push` synchronise le schéma).
 - **Recharger l'extension** : `chrome://extensions` → bouton ↻. **Toute modif de `background.js` / `vinted-rest-api.js` exige un rechargement de l'extension** (pas de déploiement).
 - Naviguateur de l'utilisateur : **Brave** (Chromium). Un onglet Vinted **connecté** doit être ouvert pour que l'extension fonctionne.
@@ -53,7 +57,7 @@ Le système a **deux composants** qui travaillent ensemble :
 
 | Fonction | Rôle | Endpoint Vinted lu | Route Manager |
 |---|---|---|---|
-| `syncVintedItemMetricsToManager` | Dressing | `/api/v2/wardrobe/{userId}/items`, `/item_upload/drafts`, `/my_orders` | `/api/extension/sync/metrics` |
+| `syncVintedItemMetricsToManager` | Dressing | `/api/v2/wardrobe/{userId}/items`, `/item_upload/drafts` | `/api/extension/sync/metrics` |
 | `syncVintedOrdersToManager` | Ventes | `/api/v2/my_orders?type=sold&status=all` | `/api/comptabilite/orders` |
 | `syncAccountBalanceToManager` | Solde wallet | scrape DOM `/wallet/balance` | `/api/comptabilite/balance` |
 | `syncVintedInboxToManager` | Messagerie | `/api/v2/conversations` | `/api/extension/sync/inbox` |
@@ -71,9 +75,9 @@ Vinted n'a pas d'API publique. On utilise l'API privée `/api/v2/*` par injectio
 2. **CDN images** (`images*.vinted.net`) : accessible **depuis le SW** (host_permissions) mais **bloqué par CORS depuis la page**. → Pour le repost : on **télécharge/traite les images dans le SW**, on les passe en base64 à la page, qui les **uploade en same-origin**. (architecture hybride)
 3. **Tokens** : `x-csrf-token` + `x-anon-id`. Capturés via un listener **`webRequest.onBeforeSendHeaders`** sur `*://*.vinted.*/api/*` (variable `vintedTokens` en haut de `background.js`) → plus fiable que le scraping du meta tag. Fallback meta tag + cookie `anon_id`.
 4. **`X-Money-Object: true`** : quand cet en-tête est envoyé, Vinted renvoie le **prix comme objet** `{amount: "X.XX", currency}` au lieu d'un nombre. → toujours extraire `price.amount` (sinon `parseFloat(objet)` = `NaN`).
-5. **`my_orders` ne contient PAS d'`item_id`** ! Clés réelles : `conversation_id, transaction_id, title, price, status, date, photo, photo_url, transaction_user_status`. Pour avoir l'`item_id` d'une vente → consulter `/api/v2/transactions/{transaction_id}`. On **cache** ces résolutions (`txItemCache` dans chrome.storage, lien `transaction_id → item_id` immuable).
+5. **`my_orders` ne contient PAS d'`item_id`** ! Clés réelles : `conversation_id, transaction_id, title, price, status, date, photo, photo_url, transaction_user_status`. Pour avoir l'`item_id` d'une vente → consulter `/api/v2/transactions/{transaction_id}`. (⚠️ L'approche `my_orders → transactions → item_id` + cache `txItemCache` qu'on avait codée dans le **dressing** a été **retirée** au profit de la détection GitHub par flags — voir §11. La connaissance reste valable si on veut la rebrancher.)
 6. **Anti-bot / rate limit** : code `106` (`rate_limit_exceeded` ou `access_denied`). Vinted flague l'automatisation au-delà de **~2-3 actions/min**. Quand un `429` survient sur les DM → on met en pause 5 min (`dmRateLimitUntil`) et on stoppe tout le scan (flag `rateLimitHit`). Garder des **délais humains** (1,5-2,5 s) entre actions d'écriture.
-7. **Ordre du dressing** : l'API wardrobe renvoie l'ordre du closet (tient compte des **bumps/remontées**). **NE PAS re-trier par date de création** (ça casse l'ordre). Garder l'ordre natif. `order=relevance` est algorithmique → peut varier.
+7. **Ordre du dressing** : l'API wardrobe renvoie l'ordre du closet (tient compte des **bumps/remontées**). **NE PAS re-trier par date de création** (ça casse l'ordre). La version GitHub adoptée lit `wardrobe?...&order=relevance` et la route `/api/dressing` trie par `uploadedAtVinted desc`. Le champ `orderIndex` (modèle Prisma) n'est **plus écrit** par `metrics/route.ts` côté GitHub (vestige inoffensif, colonne nullable conservée).
 
 ---
 
@@ -96,23 +100,16 @@ L'ancienne fonction `repostItemREST` dans `vinted-rest-api.js` (tout en SW) est 
 
 ### ✅ Fait et validé
 - **Repost** : entièrement fonctionnel (architecture hybride SW+page, temp_uuid unique, endpoint item_upload/items, extraction prix objet).
+- **Repost multi-sélection** (2026-06-16) : cases à cocher sur les cartes du dressing (onglet « En ligne ») + bouton « Tout sélectionner » → repost en lot via `/api/dressing/repost` qui crée une action `REPOST_ITEM` par article avec `delayBeforeMs` aléatoire entre Délai Min/Max (sauf le 1er). `background.js` respecte déjà `delayBeforeMs`. Tout le pipeline préexistait ; seule l'UI de sélection (`src/app/dressing/page.tsx`) manquait.
+- **DM Favoris** : feature complète — modèle `DmFavoriEvent`, page `/dm-favoris` + `/api/dm-favoris`, entrée de nav (`DashboardLayout`).
 - **Auth/proxy** : `proxy.ts` corrigé, API publiques, plus de 401 sur `/api/ventes/[id]`.
 - **Rate limit DM** : pause 5 min + arrêt complet du scan au premier 429.
 - **Dashboard** : périodes 7j/15j/30j/90j + graphique dynamique, CA/bénéfice **excluent les `ANNULEE`**.
 - **Détection auto annulations** : `comptabilite/orders` passe la `Vente` liée en `ANNULEE` + push (via `articleId` conservé).
-- **Badges dressing** : badge statut sur chaque carte (Vendu/Masqué/Brouillon/Réservé/En ligne).
+- **Dressing** : détection statut/vendus + onglets + badges = **version GitHub adoptée** (voir §11).
 
-### 🟡 En cours / à valider au prochain test
-- **Dressing — détection des vendus** : `my_orders` n'a pas d'`item_id` → résolution via `/transactions/{id}` + **cache `txItemCache`**. Au dernier test : 30/34 détectés ; le cache + résolution de toutes les transactions doit maintenant capter les 34. **À confirmer** par l'utilisateur (regarder le log `🧾 my_orders: HTTP … · X cmd · Y tx · Z match`).
-- **Dressing — ordre** : tri par date supprimé, retour à l'**ordre natif wardrobe**. À confirmer qu'il matche le closet. **Si toujours faux → proposer un sélecteur de tri** (Récents/Anciens/Prix) dans `src/app/dressing/page.tsx` pour un ordre déterministe côté manager.
-
-### Diagnostic dressing dans les logs d'activité
-La synchro dressing logge :
-```
-📊 N articles lus — V vendu(s) détecté(s)
-🧾 my_orders: HTTP 200 · 34 cmd · X tx · Y match au dressing
-```
-+ console : `clés commande: …` (structure réelle d'un objet my_orders).
+### 🟡 À valider au prochain test
+- **Dressing — détection des vendus (version GitHub)** : basée sur les flags du wardrobe (`is_sold`/`is_reserved`/`status_id 3/4/6`/`badge.title`/`item_closing_action`). À confirmer que tous les vendus remontent. **Limite connue** : un article vendu **et disparu** du wardrobe est marqué `Supprimé` (donc masqué), pas `Vendu`. Si ça pose problème → rebrancher l'approche `my_orders`/`txElement` (retirée, voir §5 et §11).
 
 ---
 
@@ -123,3 +120,25 @@ La synchro dressing logge :
 - `created_at_ts` (wardrobe) est en **secondes** (× 1000 pour Date). Souvent absent sur drafts/sold → fallback `new Date()`.
 - Le prix Vinted doit être **≥ 1.0 €** (sinon `validation_error`).
 - Répondre **en français**.
+
+---
+
+## 10. Dernière synchro Git + Vercel (2026-06-15)
+
+- **GitHub `main`** = notre version complète. Commit `a434f9f` *"feat: republication (repost), DM Favoris, dashboard periods, proxy fix"* poussé en fast-forward au-dessus du commit `5701f14` de l'autre dev (le fix dressing).
+- **Vercel prod** = redéployé depuis le local (`vercel --prod`), alias `https://vinted-manager-flame.vercel.app` → READY. `prisma db push` : base déjà en sync (DmFavoriEvent + orderIndex déjà présents). DM Favoris de nouveau en ligne.
+- ⚠️ **Le déploiement vient du LOCAL, pas de GitHub.** Si l'autre dev redéploie depuis sa machine, il peut écraser. Toujours vérifier `git fetch` + l'état du local avant de redéployer.
+
+---
+
+## 11. Décision dressing (2026-06-15) — pourquoi le local et GitHub divergeaient
+
+Le local et GitHub avaient **deux implémentations différentes** de la détection des vendus au dressing :
+
+- **Local (notre travail, plus complexe)** : croisait `my_orders → /transactions/{id} → item_id` + cache `txItemCache`, gérait les vendus disparus du wardrobe. Logs `🧾 my_orders: …`.
+- **GitHub (autre dev, plus simple)** : détection directe via les flags du payload wardrobe (`is_sold`, `is_reserved`, `status_id`, `badge.title`, `item_closing_action`).
+
+**Choix de l'utilisateur : garder la version GitHub du dressing.** Donc :
+- Restaurés à la version GitHub : `src/app/dressing/page.tsx`, `src/app/api/dressing/route.ts`, `src/app/api/extension/sync/metrics/route.ts`.
+- Dans `background.js`, **seule** la fonction `syncVintedItemMetricsToManager` a été remplacée par celle de GitHub (le reste — repost, DM favoris — est resté local). Splice fait par script Node en UTF-8 pour préserver accents/emojis.
+- Tout le reste de notre travail (repost, DM Favoris, dashboard, proxy, auto-annulation) a été conservé puis poussé.

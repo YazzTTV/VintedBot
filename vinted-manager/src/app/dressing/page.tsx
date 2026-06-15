@@ -159,6 +159,33 @@ export default function DressingPage() {
     setTimeout(() => setToast(null), 3500)
   }
 
+  const toggleSelect = (itemId: string) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev)
+      if (next.has(itemId)) {
+        next.delete(itemId)
+      } else {
+        next.add(itemId)
+      }
+      return next
+    })
+  }
+
+  const allFilteredSelected = filteredItems.length > 0 && filteredItems.every(item => selectedItems.has(item.id))
+
+  const toggleSelectAll = () => {
+    setSelectedItems(prev => {
+      if (allFilteredSelected) {
+        const next = new Set(prev)
+        filteredItems.forEach(item => next.delete(item.id))
+        return next
+      }
+      const next = new Set(prev)
+      filteredItems.forEach(item => next.add(item.id))
+      return next
+    })
+  }
+
 
 
   const handleRepostSubmit = async () => {
@@ -436,8 +463,21 @@ export default function DressingPage() {
             </div>
           </div>
           
-          <div className="text-sm text-zinc-500 text-right">
-            {filteredItems.length} annonce{filteredItems.length !== 1 ? 's' : ''} dans cet onglet
+          <div className="flex items-center justify-between gap-4">
+            {activeTab === 'ACTIF' && filteredItems.length > 0 ? (
+              <button
+                onClick={toggleSelectAll}
+                className="text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1.5"
+              >
+                <Check className="w-3.5 h-3.5" />
+                {allFilteredSelected ? "Tout désélectionner" : "Tout sélectionner"}
+              </button>
+            ) : (
+              <span />
+            )}
+            <div className="text-sm text-zinc-500 text-right">
+              {filteredItems.length} annonce{filteredItems.length !== 1 ? 's' : ''} dans cet onglet
+            </div>
           </div>
         </div>
       )}
@@ -511,6 +551,22 @@ export default function DressingPage() {
                   {/* Selection highlight */}
                   {selectedItems.has(item.id) && (
                     <div className="absolute inset-0 bg-emerald-500/20 border-2 border-emerald-500/50 z-0" />
+                  )}
+
+                  {/* Selection checkbox (onglet En ligne) */}
+                  {activeTab === 'ACTIF' && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
+                      className={cn(
+                        "absolute top-2 right-2 z-20 w-7 h-7 rounded-lg border flex items-center justify-center transition-all",
+                        selectedItems.has(item.id)
+                          ? "bg-emerald-600 border-emerald-500 text-white"
+                          : "bg-zinc-900/80 border-zinc-600 text-transparent hover:border-emerald-500/60 backdrop-blur-sm"
+                      )}
+                      title={selectedItems.has(item.id) ? "Retirer de la sélection" : "Ajouter à la sélection"}
+                    >
+                      <Check className="w-4 h-4" />
+                    </button>
                   )}
 
                   {/* Status Badges */}
