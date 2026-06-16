@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { X, User, MessageCircle, ShoppingBag, Star } from 'lucide-react';
+import Link from 'next/link';
 
 interface ClientSidePanelProps {
   client: any;
@@ -57,27 +58,28 @@ export default function ClientSidePanel({ client, onClose }: ClientSidePanelProp
 
         {/* Conversations List */}
         <div className="space-y-3">
-          <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-4">Conversations Associées</h3>
+          <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-4">Conversation Associée</h3>
           
-          {client.conversations && client.conversations.length > 0 ? (
-            client.conversations.map((conv: any, idx: number) => (
-              <div key={idx} className="bg-zinc-900/40 rounded-xl p-4 border border-zinc-800/30">
+          {client.conversation ? (
+              <div className="bg-zinc-900/40 rounded-xl p-4 border border-zinc-800/30">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2 text-zinc-300">
                     <MessageCircle className="w-4 h-4 text-blue-400" />
                     <span className="text-sm font-medium">Message</span>
                   </div>
                 </div>
-                {conv.title && (
+                {client.conversation.title && (
                   <p className="text-xs text-zinc-500 mb-3 bg-zinc-950/50 p-2 rounded border border-zinc-800/50">
-                    &quot;{conv.title}&quot;
+                    &quot;{client.conversation.title}&quot;
                   </p>
                 )}
-                <button className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-colors">
+                <Link 
+                  href={`/inbox`} 
+                  className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg transition-colors block text-center"
+                >
                   Ouvrir la conversation
-                </button>
+                </Link>
               </div>
-            ))
           ) : (
              <div className="text-zinc-500 text-sm italic">Aucun détail disponible.</div>
           )}
