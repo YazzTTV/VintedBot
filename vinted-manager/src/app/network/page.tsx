@@ -35,6 +35,15 @@ export default async function NetworkPage() {
           hasOffer: true,
           itemId: true,
           title: true,
+          messages: {
+            select: {
+              id: true,
+              senderUsername: true,
+              content: true,
+              createdAtVinted: true
+            },
+            orderBy: { createdAtVinted: 'asc' }
+          }
         }
       },
       orders: {
@@ -78,6 +87,8 @@ export default async function NetworkPage() {
             hasOffer: conv.hasOffer,
             itemId: articleId,
             hasBought: bot.orders.some(o => o.buyerLogin === conv.buyerUsername),
+            botName: bot.name,
+            botUsername: bot.vintedUsername,
             conversation: conv // Store the conversation data for the SidePanel
           });
         }
