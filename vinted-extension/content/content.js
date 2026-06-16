@@ -253,7 +253,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     // Lecture de l'identité Vinted depuis le contexte de la page
     if (request.action === "fetchUserFromPage") {
-        fetch("/api/v2/users/current", { credentials: "include", headers: { Accept: "application/json" } })
+        const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+        const csrfToken = csrfMeta ? csrfMeta.content : null;
+        const headers = { Accept: "application/json" };
+        if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
+
+        fetch("/api/v2/users/current", { credentials: "include", headers })
             .then(r => {
                 if (!r.ok) throw new Error("HTTP " + r.status);
                 return r.json();

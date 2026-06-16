@@ -50,26 +50,37 @@ async function getCsrfToken() {
         return _csrfCache.token;
     }
 
-    return new Promise((resolve) => {
-        chrome.tabs.query({ url: ["*://*.vinted.fr/*", "*://*.vinted.com/*", "*://*.vinted.nl/*", "*://*.vinted.be/*", "*://*.vinted.de/*", "*://*.vinted.es/*", "*://*.vinted.it/*"] }, (tabs) => {
-            if (!tabs || tabs.length === 0) {
-                console.warn("⚠️ Aucun onglet Vinted ouvert pour extraire le Token CSRF.");
-                resolve(null);
-                return;
+    try {
+        const tab = await getOptimalVintedTab();
+        if (!tab) {
+            console.warn("⚠️ Aucun onglet Vinted optimal pour extraire le Token CSRF.");
+            return null;
+        }
+
+        const injection = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta && meta.content) return meta.content;
+                
+                const re = /"csrf[_-]token"\s*[:,]\s*"([^"]+)"/;
+                const scripts = document.querySelectorAll("script");
+                for (let i = 0; i < scripts.length; i++) {
+                    const m = (scripts[i].textContent || "").match(re);
+                    if (m && m[1]) return m[1];
+                }
+                return null;
             }
-            chrome.tabs.sendMessage(tabs[0].id, { action: "getCsrfToken" }, (response) => {
-                if (chrome.runtime.lastError) {
-                    resolve(null);
-                    return;
-                }
-                const token = response ? response.token : null;
-                if (token) {
-                    _csrfCache = { token, expiry: Date.now() + CSRF_TTL_MS };
-                }
-                resolve(token);
-            });
         });
-    });
+        
+        const token = injection?.[0]?.result || null;
+        if (token) {
+            _csrfCache = { token, expiry: Date.now() + CSRF_TTL_MS };
+        }
+        return token;
+    } catch (e) {
+        return null;
+    }
 }
 
 /**

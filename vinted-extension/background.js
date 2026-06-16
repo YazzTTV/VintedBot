@@ -152,9 +152,14 @@ async function fetchUserIdentityDirect(tabId) {
             target: { tabId },
             func: async () => {
                 try {
+                    const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+                    const csrf = csrfMeta ? csrfMeta.content : null;
+                    const headers = { "Accept": "application/json" };
+                    if (csrf) headers["X-CSRF-Token"] = csrf;
+
                     const r = await fetch("/api/v2/users/current", {
                         credentials: "include",
-                        headers: { "Accept": "application/json" }
+                        headers: headers
                     });
                     if (!r.ok) return { success: false, error: "HTTP " + r.status };
                     const data = await r.json();
@@ -2231,7 +2236,10 @@ async function syncVintedInboxToManager() {
 
                     // 1. Récupérer la liste plus large des conversations du fil (200 pour un balayage profond progressif)
                     const r = await fetch("/api/v2/inbox?per_page=200", { credentials: "include", headers });
-                    if (!r.ok) throw new Error(`Vinted HTTP ${r.status}`);
+                    if (!r.ok) {
+                        const txt = await r.text();
+                        throw new Error(`Vinted HTTP ${r.status} : ${txt.substring(0, 150)}`);
+                    }
                     const inboxData = await r.json();
                     
                     // Détection proactive d'une expiration de session Vinted ou d'un blocage identité
