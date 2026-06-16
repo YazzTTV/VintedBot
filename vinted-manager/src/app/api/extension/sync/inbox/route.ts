@@ -153,7 +153,7 @@ export async function POST(request: Request) {
                 });
                 currentItemId = matchedItem.id;
             } else {
-                // 2. Chercher dans les commandes (VintedOrderSynced)
+                // 2. Chercher dans les commandes (VintedOrderSynced) par titre
                 const allOrders = await prisma.vintedOrderSynced.findMany({
                     where: { botAccountId: botAccount.id }
                 });
@@ -171,6 +171,19 @@ export async function POST(request: Request) {
                         data: { itemId: matchedOrder.itemId }
                     });
                     currentItemId = matchedOrder.itemId;
+                }
+                
+                // 3. Heuristique Forte par buyerLogin
+                if (!currentItemId && buyerUsername && buyerUsername !== "Acheteur Inconnu") {
+                    const matchedOrderBuyer = allOrders.find(o => o.buyerLogin === buyerUsername);
+                    if (matchedOrderBuyer && matchedOrderBuyer.itemId) {
+                        await prisma.vintedConversation.update({
+                            where: { id },
+                            data: { itemId: matchedOrderBuyer.itemId }
+                        });
+                        currentItemId = matchedOrderBuyer.itemId;
+                        console.log(`✅ [HEURISTIQUE BUYER] Conversation liée via le pseudo de l'acheteur ${buyerUsername} !`);
+                    }
                 }
             }
         }

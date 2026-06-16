@@ -2369,23 +2369,31 @@ const cachedTime = cache[idStr];
                                     ? String(details.transaction.item_id) 
                                     : (details.item_id)
                                         ? String(details.item_id)
-                                        : (details.transaction && details.transaction.order && details.transaction.order.items && details.transaction.order.items[0])
-                                            ? String(details.transaction.order.items[0].id)
-                                            : null;
+                                        : (thread.item_id)
+                                            ? String(thread.item_id)
+                                            : (thread.item && thread.item.id)
+                                                ? String(thread.item.id)
+                                                : (details.transaction && details.transaction.order && details.transaction.order.items && details.transaction.order.items[0])
+                                                    ? String(details.transaction.order.items[0].id)
+                                                    : null;
                                     
                             const title = (details.item_title) 
                                 ? details.item_title
                                 : (details.item && details.item.title) 
                                     ? details.item.title 
-                                    : (details.transaction && (details.transaction.item_title || details.transaction.title)) 
-                                        ? (details.transaction.item_title || details.transaction.title)
-                                        : (details.transaction && details.transaction.order && details.transaction.order.title)
-                                            ? details.transaction.order.title
-                                            : (details.transaction && details.transaction.order && details.transaction.order.items && details.transaction.order.items[0])
-                                                ? details.transaction.order.items[0].title
-                                                : (details.subtitle && !details.subtitle.match(/^(\d+)[.,]?(\d*)\s*€$/))
-                                                    ? details.subtitle
-                                                    : null;
+                                    : (thread.item_title)
+                                        ? thread.item_title
+                                        : (thread.item && thread.item.title)
+                                            ? thread.item.title
+                                            : (details.transaction && (details.transaction.item_title || details.transaction.title)) 
+                                                ? (details.transaction.item_title || details.transaction.title)
+                                                : (details.transaction && details.transaction.order && details.transaction.order.title)
+                                                    ? details.transaction.order.title
+                                                    : (details.transaction && details.transaction.order && details.transaction.order.items && details.transaction.order.items[0])
+                                                        ? details.transaction.order.items[0].title
+                                                        : (details.subtitle && !details.subtitle.match(/^(\d+)[.,]?(\d*)\s*€$/))
+                                                            ? details.subtitle
+                                                            : null;
 
                             // Extraction ultime de l'itemId via les messages si toujours introuvable
                             if (!itemId && details.messages && details.messages.length > 0) {
