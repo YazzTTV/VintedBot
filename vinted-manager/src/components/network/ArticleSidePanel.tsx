@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { X, Tag, Package, BarChart2 } from 'lucide-react';
+import Link from 'next/link';
 
 interface ArticleSidePanelProps {
   article: any;
@@ -61,6 +62,14 @@ export default function ArticleSidePanel({ article, onClose }: ArticleSidePanelP
         </div>
 
       </div>
+
+      {/* Action Footer */}
+      <div className="p-4 pb-24 border-t border-zinc-800/50 bg-zinc-900/30 flex mt-auto">
+        <Link href={`/stock`} className="flex-1 flex items-center justify-center gap-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 text-sm font-semibold py-2.5 rounded-lg transition-colors border border-purple-500/20">
+          <Tag className="w-4 h-4" /> Voir dans le Stock
+        </Link>
+      </div>
+
     </div>
   );
 }

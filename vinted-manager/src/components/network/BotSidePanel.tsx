@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, Bot, Clock, Wallet, ShoppingBag, Activity, RefreshCw, MessageSquare, TrendingUp } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import Link from 'next/link';
 
 interface BotSidePanelProps {
   bot: any | null;
@@ -129,9 +130,9 @@ export default function BotSidePanel({ bot, onClose }: BotSidePanelProps) {
 
       {/* Action Footer */}
       <div className="p-4 pb-24 border-t border-zinc-800/50 bg-zinc-900/30 flex gap-2">
-        <button className="flex-1 flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors border border-zinc-700">
+        <Link href={`/inbox?bot=${bot.name}`} className="flex-1 flex items-center justify-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors border border-zinc-700">
           <MessageSquare className="w-4 h-4" /> Inbox
-        </button>
+        </Link>
         <button className="flex-1 flex items-center justify-center gap-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 text-sm font-semibold py-2.5 rounded-lg transition-colors border border-emerald-500/20">
           <RefreshCw className="w-4 h-4" /> Force Sync
         </button>

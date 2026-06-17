@@ -247,6 +247,10 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
     const isHovered = node === hoverNode;
     const isSelected = selectedBot?.id === node.id;
     
+    // Floating effect based on time and node ID
+    const floatY = Math.sin((Date.now() / 1000) * 2 + (node.id?.toString().charCodeAt(0) || 0)) * 3;
+    const drawY = node.y + floatY;
+    
     // Default size and style
     const baseSize = node.val;
     const size = isCentral ? baseSize + (pulse * 1.5) : baseSize;
@@ -257,7 +261,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
       ctx.shadowColor = node.hasBought ? '#facc15' : '#60a5fa';
       ctx.shadowBlur = node.hasBought ? 15 * globalScale : 8 * globalScale;
       
-      drawStar(ctx, node.x, node.y, 5, size * 2, size);
+      drawStar(ctx, node.x, drawY, 5, size * 2, size);
       ctx.shadowBlur = 0; // Reset shadow
     } else {
       // Draw standard circle
@@ -278,7 +282,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
       }
 
       ctx.beginPath();
-      ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
+      ctx.arc(node.x, drawY, size, 0, 2 * Math.PI, false);
       ctx.fillStyle = fillColor;
       
       if (isCentral || (isBot && node.isOnline) || isHovered || isSelected) {
@@ -294,13 +298,13 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
     // Central Node Rings
     if (isCentral) {
       ctx.beginPath();
-      ctx.arc(node.x, node.y, size + 4, 0, 2 * Math.PI, false);
+      ctx.arc(node.x, drawY, size + 4, 0, 2 * Math.PI, false);
       ctx.strokeStyle = `rgba(139, 92, 246, ${0.5 + pulse * 0.2})`;
       ctx.lineWidth = 1 / globalScale;
       ctx.stroke();
       
       ctx.beginPath();
-      ctx.arc(node.x, node.y, size + 8 + (pulse * 2), 0, 2 * Math.PI, false);
+      ctx.arc(node.x, drawY, size + 8 + (pulse * 2), 0, 2 * Math.PI, false);
       ctx.strokeStyle = `rgba(139, 92, 246, ${0.2 - pulse * 0.1})`;
       ctx.lineWidth = 0.5 / globalScale;
       ctx.stroke();
@@ -309,7 +313,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
     // Draw Selection Ring
     if (isSelected && isBot) {
       ctx.beginPath();
-      ctx.arc(node.x, node.y, size + 3, 0, 2 * Math.PI, false);
+      ctx.arc(node.x, drawY, size + 3, 0, 2 * Math.PI, false);
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 1.5 / globalScale;
       ctx.stroke();
@@ -328,7 +332,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
       
       // Shift text lower for stars
       const textOffset = (isClient && (node.hasOffer || node.hasBought)) ? size * 2 : size;
-      ctx.fillText(node.name, node.x, node.y + textOffset + 6 / globalScale);
+      ctx.fillText(node.name, node.x, drawY + textOffset + 6 / globalScale);
 
       // Financials (for bots only)
       if (isBot) {
@@ -336,7 +340,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
         const balanceFontSize = 9 / globalScale;
         ctx.font = `${balanceFontSize}px Inter, monospace`;
         ctx.fillStyle = '#10b981'; // Emerald for money
-        ctx.fillText(`${total.toFixed(2)} €`, node.x, node.y + textOffset + 6 / globalScale + fontSize + 2 / globalScale);
+        ctx.fillText(`${total.toFixed(2)} €`, node.x, drawY + textOffset + 6 / globalScale + fontSize + 2 / globalScale);
       }
     }
   }, [hoverNode, selectedBot, pulse]);
@@ -363,9 +367,10 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
         // Node config
         nodeCanvasObject={paintNode}
         nodePointerAreaPaint={(node: any, color: string, ctx: CanvasRenderingContext2D) => {
+          const floatY = Math.sin((Date.now() / 1000) * 2 + (node.id?.toString().charCodeAt(0) || 0)) * 3;
           ctx.fillStyle = color;
           ctx.beginPath();
-          ctx.arc(node.x, node.y, node.val * 4, 0, 2 * Math.PI, false); // Hit area
+          ctx.arc(node.x, node.y + floatY, node.val * 4, 0, 2 * Math.PI, false); // Hit area
           ctx.fill();
         }}
         onNodeHover={(node) => {
