@@ -240,7 +240,7 @@ export async function POST(request: Request) {
       // Notification push : nouvelle offre (transition false → true sur hasOffer)
       if (!!hasOffer && (prevConv === null || prevConv.hasOffer === false)) {
         await sendPush({
-          title: 'Offre recue',
+          title: `💰 ${botAccount.name} — offre reçue`,
           body: `${buyerUsername} propose ${offerPrice} EUR sur ${cleanTitle}`,
           url: '/inbox',
           tag: `offer-${id}`
@@ -280,7 +280,7 @@ export async function POST(request: Request) {
           // Notification push : nouveau message de l'acheteur (pas du bot)
           if (msg.senderUsername === buyerUsername) {
             await sendPush({
-              title: 'Nouveau message',
+              title: `💬 ${botAccount.name} — nouveau message`,
               body: `${msg.senderUsername}: ${String(msg.content).slice(0, 80)}`,
               url: '/inbox',
               tag: `msg-${id}`

@@ -162,7 +162,7 @@ export async function POST(request: Request) {
               })
               console.log(`🚫 [AUTO-ANNULATION] Vente ${linkedVente.id} marquée ANNULEE (${syncedOrder.title})`)
               await sendPush({
-                title: '🚫 Commande annulée',
+                title: `🚫 ${account.name} — commande annulée`,
                 body: `${syncedOrder.title} — ${syncedOrder.buyerLogin || 'Inconnu'}`,
                 url: '/ventes',
                 tag: 'cancellation'
@@ -393,7 +393,7 @@ export async function POST(request: Request) {
 
             // Notification push : nouvelle vente
             await sendPush({
-              title: 'Nouvelle vente',
+              title: `💸 ${account.name} — nouvelle vente`,
               body: `${syncedOrder.title} - ${prixVente} EUR (${syncedOrder.buyerLogin || 'Inconnu'})`,
               url: '/ventes',
               tag: 'sale'
@@ -468,8 +468,9 @@ export async function POST(request: Request) {
               vente.dateVente >= recentSaleCutoff
             ) {
               // Anti-spam : pas de nouvelle action si une est déjà PENDING/RUNNING/SUCCESS,
-              // OU si une tentative (même FAILED) date de moins de 30 min → on laisse respirer.
-              const retryCutoff = new Date(Date.now() - 30 * 60 * 1000)
+              // OU si une tentative (même FAILED) est trop récente → on laisse respirer.
+              // TEMPORAIRE (diagnostic) : 1 min. À remettre à 30 min une fois le bug bordereau réglé.
+              const retryCutoff = new Date(Date.now() - 1 * 60 * 1000)
               const existingLabelAction = await prisma.botActionQueue.findFirst({
                 where: {
                   actionType: 'GENERATE_LABEL',
