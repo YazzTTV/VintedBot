@@ -374,6 +374,23 @@ export async function POST(request: Request) {
               })
             }
 
+            // 🏷️ Création Automatique de l'action GENERATE_LABEL (« Obtenir le bordereau » à l'instant de la vente).
+            // Sur Vinted l'acheteur a déjà payé au moment de l'achat → le bordereau est disponible immédiatement.
+            // Ce bloc est englobé dans `if (!syncedOrder.articleId)` donc il ne s'exécute qu'UNE fois par vente (pas de doublon).
+            if (account.id && syncedOrder.id) {
+              await prisma.botActionQueue.create({
+                data: {
+                  botAccountId: account.id,
+                  actionType: 'GENERATE_LABEL',
+                  status: 'PENDING',
+                  payload: {
+                    venteId: newVente.id,
+                    vintedTransactionId: syncedOrder.id // = transaction_id Vinted
+                  }
+                }
+              })
+            }
+
             // Notification push : nouvelle vente
             await sendPush({
               title: 'Nouvelle vente',

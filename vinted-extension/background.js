@@ -987,6 +987,16 @@ async function handleSheinCart(url, taille, venteId) {
                             const closeBtns = document.querySelectorAll('.c-coupon-box .she-close, .cookie-banner .close-btn');
                             closeBtns.forEach(btn => btn.click());
 
+                            // 🛡️ Détection captcha SHEIN ("je suis humain" / GeeTest) : si la page est un
+                            // contrôle anti-bot, le produit n'est pas chargé. On STOPPE immédiatement sans
+                            // cliquer ni extraire de prix (sinon on remonterait un faux bouton + un prix bidon).
+                            const __pageText = (document.body?.innerText || "").toLowerCase();
+                            const __captchaMarkers = ["je suis humain", "i'm a human", "i am human", "verify you are human", "press & hold", "appuyez et maintenez", "vérifiez que vous", "verifiez que vous", "captcha"];
+                            const __hasCaptchaEl = !!document.querySelector('.geetest_box, .geetest_holder, [class*="geetest"], #captcha, [id*="captcha"], iframe[src*="captcha"]');
+                            if (__hasCaptchaEl || __captchaMarkers.some(m => __pageText.includes(m))) {
+                                return { success: false, state: "CAPTCHA", price: null };
+                            }
+
                             let sizeClicked = false;
 
                             if (targetTaille) {
@@ -1089,7 +1099,9 @@ async function handleSheinCart(url, taille, venteId) {
                                 return { success: true, sizeFound: sizeClicked, state: "CLICKED", price: extractedPrice };
                             }
                             
-                            return { success: false, state: "WAITING", sizeFound: sizeClicked, price: extractedPrice };
+                            // Pas de bouton "Ajouter" trouvé → page produit pas (encore) chargée :
+                            // on NE renvoie PAS de prix (éviter un prix bidon issu d'une page intermédiaire).
+                            return { success: false, state: "WAITING", sizeFound: sizeClicked, price: null };
                         } catch (err) {
                             return { success: false, error: err.message };
                         }
@@ -1103,6 +1115,11 @@ async function handleSheinCart(url, taille, venteId) {
                 if (!res) {
                     console.warn("[SHEIN] res est undefined, results=", results);
                     // On continue le polling
+                } else if (res.state === "CAPTCHA") {
+                    // Captcha SHEIN : inutile de réessayer 15 fois, on stoppe avec une erreur claire.
+                    console.warn("[SHEIN] Captcha détecté — arrêt de l'ajout au panier.");
+                    finalRes = { success: false, error: 'Captcha SHEIN ("je suis humain") détecté — ajout au panier impossible sans intervention humaine.' };
+                    break;
                 } else if (res.success) {
                     finalRes = res;
                     break;
@@ -1236,10 +1253,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     }
     
     if (alarm.name === METRICS_ALARM_NAME) {
-        console.log("⏰ [ALARM] Lancement Synchro Balance, Inbox + Dressing...");
+        console.log("⏰ [ALARM] Lancement Synchro Balance, Ventes, Inbox + Dressing...");
         (async () => {
             try {
                 await syncAccountBalanceToManager();
+                // Synchro AUTO des ventes : enregistre la vente côté Manager (dashboard + notification)
+                // et déclenche la file d'actions (auto-bordereau). Try/catch isolé pour ne pas
+                // bloquer inbox/dressing si l'aspiration des commandes échoue (ex: aucun onglet).
+                try {
+                    await syncVintedOrdersToManager();
+                } catch (ordErr) {
+                    console.error("❌ Erreur synchro Ventes (auto) :", ordErr);
+                }
                 await syncVintedInboxToManager();
                 await syncVintedItemMetricsToManager();
             } catch (err) {
@@ -2845,7 +2870,9 @@ async function pollActionQueueFromManager() {
                                 const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
                                 
                                 const payload = { spvState: 'PANIER' };
-                                if (cartResult.price) payload.prixAchatUnitaire = cartResult.price;
+                                // Ne remonter le prix d'achat QUE s'il est fiable : ajout réellement réussi + valeur > 0.
+                                const trustedPrice = (cartResult.success === true && Number(cartResult.price) > 0) ? Number(cartResult.price) : null;
+                                if (trustedPrice) payload.prixAchatUnitaire = trustedPrice;
 
                                 const res = await fetch(`${managerRootUrl}/api/ventes/${action.payload.venteId}`, {
                                     method: "PATCH",
@@ -2857,9 +2884,9 @@ async function pollActionQueueFromManager() {
                                     throw new Error(`HTTP error! status: ${res.status}`);
                                 }
                                 
-                                if (cartResult.price) {
-                                    terminalLog(`💸 Ajout du produit au panier et récupération du prix d'achat (${cartResult.price}€). SPV mis à jour (PANIER).`);
-                                    console.log(`💸 [SHEIN CART] Prix d'achat ${cartResult.price}€ et état PANIER remontés au Manager pour la vente ${action.payload.venteId}.`);
+                                if (trustedPrice) {
+                                    terminalLog(`💸 Ajout du produit au panier et récupération du prix d'achat (${trustedPrice}€). SPV mis à jour (PANIER).`);
+                                    console.log(`💸 [SHEIN CART] Prix d'achat ${trustedPrice}€ et état PANIER remontés au Manager pour la vente ${action.payload.venteId}.`);
                                 } else {
                                     terminalLog(`✅ Ajout du produit au panier. SPV mis à jour (PANIER).`);
                                 }
