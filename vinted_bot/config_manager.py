@@ -23,6 +23,9 @@ class AccountConfig:
         self.floor_template_path = os.path.join(self.account_dir, "floor_template.jpg")
         self.hanger_template_path = os.path.join(self.account_dir, "hanger_template.jpg")
         self.hanger_templates_dir = os.path.join(self.account_dir, "Hanger_Templates")
+        # Pool de mannequins (paires face/dos) pour varier les poses des selfies Nano Banana.
+        # Convention de nommage : vXX_front.jpg / vXX_back.jpg (ex: v01_front.jpg, v01_back.jpg).
+        self.mannequins_dir = os.path.join(self.account_dir, "Mannequins")
         self.history_path = os.path.join(self.account_dir, "Sourcing_History.md")
         
         # Chargement d'éventuelles propriétés customisées depuis settings.json
@@ -87,6 +90,9 @@ class AccountConfig:
             
         # Initialiser le dossier des modèles de cintres multiples
         os.makedirs(self.hanger_templates_dir, exist_ok=True)
+
+        # Initialiser le dossier du pool de mannequins (vide par defaut, a remplir manuellement)
+        os.makedirs(self.mannequins_dir, exist_ok=True)
         global_hanger_dir = os.path.join(BOT_DIR, "Hanger_Templates")
         if os.path.exists(global_hanger_dir):
             for file in os.listdir(global_hanger_dir):
@@ -132,6 +138,42 @@ class AccountConfig:
                         json.dump(data, f, indent=2)
             except Exception:
                 pass
+
+def pick_random_mannequin(account_dir: str) -> tuple:
+    """
+    Tire une paire (face, dos) au hasard dans <account_dir>/Mannequins/.
+
+    Convention de nommage attendue : vXX_front.<ext> + vXX_back.<ext>
+    (ex: v01_front.jpg / v01_back.jpg). Le dos est optionnel : si seul le
+    front existe, la paire est (front, None).
+
+    Retourne (front_path, back_path).
+    Fallback si le pool est vide : (avatar.jpg, None) du compte, ou (None, None).
+    """
+    import glob
+    import random
+
+    mdir = os.path.join(account_dir, "Mannequins")
+    pairs = []
+    if os.path.isdir(mdir):
+        # On indexe par les fichiers *_front.* puis on cherche le *_back.* correspondant
+        fronts = sorted(
+            glob.glob(os.path.join(mdir, "*_front.*"))
+            + glob.glob(os.path.join(mdir, "*_FRONT.*"))
+        )
+        for front in fronts:
+            base = front.rsplit("_front", 1)[0] if "_front" in front else front.rsplit("_FRONT", 1)[0]
+            backs = glob.glob(base + "_back.*") + glob.glob(base + "_BACK.*")
+            back = backs[0] if backs else None
+            pairs.append((front, back))
+
+    if pairs:
+        return random.choice(pairs)
+
+    # Fallback retrocompatible : ancien avatar unique
+    avatar = os.path.join(account_dir, "avatar.jpg")
+    return (avatar if os.path.exists(avatar) else None, None)
+
 
 def get_account_config(account_name: str = "nina") -> AccountConfig:
     """

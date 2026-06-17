@@ -9,16 +9,12 @@
   "analysis_prompt_variables": ["PERSONA", "CONSIGNES_LANGUE", "PHRASES_TYPIQUES", "TAILLE_CIBLE"],
   "image_recipe": [
     "selfie",
-    "flat_lay",
-    "hanger",
     "profile",
-    "folded"
+    "hanger"
   ],
   "output_images": {
     "selfie": "selfie_upscaled.jpg",
-    "flat_lay": "flat_lay_upscaled.jpg",
-    "hanger": "hanger_upscaled.jpg",
     "profile": "profile_upscaled.jpg",
-    "folded": "folded_upscaled.jpg"
+    "hanger": "hanger_upscaled.jpg"
   }
 }

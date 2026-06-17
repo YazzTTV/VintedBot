@@ -297,7 +297,7 @@ class ScreenshotHandler(FileSystemEventHandler):
         
         # Lancement de la génération d'images en parallèle via l'orchestrateur asynchrone de ChatGPT
         import asyncio
-        from chatgpt_upscaler import generate_all_images_parallel_async
+        from nano_banana import generate_all_images_parallel_async
         
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
