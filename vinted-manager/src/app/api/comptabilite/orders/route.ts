@@ -458,12 +458,26 @@ export async function POST(request: Request) {
               where: { articleId: syncedOrder.articleId },
               include: { expedition: true }
             })
-            if (vente && vente.botAccountId && !["EXPEDIEE", "ANNULEE"].includes(vente.statut) && !vente.expedition?.bordereauUrl) {
+            // On ne génère un bordereau que pour les ventes RÉCENTES (≤ 7 j) : inutile de tenter
+            // sur de vieilles ventes dont le shipment Vinted n'existe plus (échec garanti).
+            const recentSaleCutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+            if (
+              vente && vente.botAccountId &&
+              !["EXPEDIEE", "ANNULEE"].includes(vente.statut) &&
+              !vente.expedition?.bordereauUrl &&
+              vente.dateVente >= recentSaleCutoff
+            ) {
+              // Anti-spam : pas de nouvelle action si une est déjà PENDING/RUNNING/SUCCESS,
+              // OU si une tentative (même FAILED) date de moins de 30 min → on laisse respirer.
+              const retryCutoff = new Date(Date.now() - 30 * 60 * 1000)
               const existingLabelAction = await prisma.botActionQueue.findFirst({
                 where: {
                   actionType: 'GENERATE_LABEL',
-                  status: { in: ['PENDING', 'RUNNING', 'SUCCESS'] },
-                  payload: { path: ['venteId'], equals: vente.id }
+                  payload: { path: ['venteId'], equals: vente.id },
+                  OR: [
+                    { status: { in: ['PENDING', 'RUNNING', 'SUCCESS'] } },
+                    { createdAt: { gt: retryCutoff } }
+                  ]
                 }
               })
               if (!existingLabelAction) {

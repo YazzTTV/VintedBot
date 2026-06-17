@@ -3335,18 +3335,20 @@ async function executeBotAction(tabId, action) {
 
                 throw new Error(`Type d'action inconnu : ${type}`);
             } catch (err) {
-                throw new Error(err.message);
+                // NE PAS rejeter : si la fonction injectée throw, executeScript renvoie result=undefined
+                // et on perd l'erreur réelle. On la renvoie comme DONNÉE pour pouvoir la remonter.
+                return { ok: false, error: (err && err.message) ? err.message : String(err) };
             }
         },
         args: [actionType, payload]
     });
 
-    // Si injection a throwé une erreur, elle arrive ici
     const finalRes = result?.[0]?.result;
     if (finalRes && finalRes.ok) {
         return finalRes;
     }
-    throw new Error("Script d'injection retourné invalide.");
+    // Remonter la VRAIE erreur de l'injection si disponible (sinon message générique).
+    throw new Error(finalRes && finalRes.error ? finalRes.error : "Script d'injection retourné invalide (aucun résultat).");
 }
 
 // ===================================================================
