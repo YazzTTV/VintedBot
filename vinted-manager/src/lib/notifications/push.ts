@@ -20,14 +20,22 @@ interface SendPushParams {
  * Best-effort push to all stored subscriptions.
  * Never throws to the caller — a failed push must not break a sync.
  */
-export async function sendPush({ title, body, url, tag }: SendPushParams): Promise<void> {
+export interface SendPushResult {
+  configured: boolean
+  total: number
+  sent: number
+  failed: number
+  results: { endpoint: string; ok: boolean; statusCode?: number; error?: string }[]
+}
+
+export async function sendPush({ title, body, url, tag }: SendPushParams): Promise<SendPushResult> {
   const subject = process.env.VAPID_SUBJECT
   const publicKey = process.env.VAPID_PUBLIC_KEY
   const privateKey = process.env.VAPID_PRIVATE_KEY
 
   if (!subject || !publicKey || !privateKey) {
     console.warn('[push] VAPID env vars missing — skipping web push')
-    return
+    return { configured: false, total: 0, sent: 0, failed: 0, results: [] }
   }
 
   webpush.setVapidDetails(subject, publicKey, privateKey)
@@ -38,15 +46,15 @@ export async function sendPush({ title, body, url, tag }: SendPushParams): Promi
     subscriptions = await prisma.pushSubscription.findMany()
   } catch (err) {
     console.error('[push] Failed to load subscriptions:', err)
-    return
+    return { configured: true, total: 0, sent: 0, failed: 0, results: [] }
   }
 
-  if (subscriptions.length === 0) return
+  if (subscriptions.length === 0) return { configured: true, total: 0, sent: 0, failed: 0, results: [] }
 
   const payload = JSON.stringify({ title, body, url, tag })
 
-  await Promise.all(
-    subscriptions.map(async (sub) => {
+  const results = await Promise.all(
+    subscriptions.map(async (sub): Promise<SendPushResult['results'][number]> => {
       try {
         await webpush.sendNotification(
           {
@@ -58,6 +66,7 @@ export async function sendPush({ title, body, url, tag }: SendPushParams): Promi
           },
           payload
         )
+        return { endpoint: sub.endpoint, ok: true }
       } catch (err: any) {
         const statusCode: number | undefined = err?.statusCode
 
@@ -72,7 +81,11 @@ export async function sendPush({ title, body, url, tag }: SendPushParams): Promi
         } else {
           console.error(`[push] sendNotification failed for ${sub.endpoint}:`, err)
         }
+        return { endpoint: sub.endpoint, ok: false, statusCode, error: err?.body || err?.message || String(err) }
       }
     })
   )
+
+  const sent = results.filter((r) => r.ok).length
+  return { configured: true, total: results.length, sent, failed: results.length - sent, results }
 }

@@ -15,14 +15,14 @@ export async function OPTIONS() {
 // Sert a valider le flux push de bout en bout (SW + abonnement + VAPID).
 export async function POST() {
   try {
-    await sendPush({
+    const result = await sendPush({
       title: 'Notification de test',
       body: 'Si tu vois ce message, les notifications push fonctionnent.',
       url: '/',
       tag: 'test',
     })
 
-    return NextResponse.json({ success: true }, { headers: corsHeaders })
+    return NextResponse.json({ success: true, ...result }, { headers: corsHeaders })
   } catch (error: any) {
     console.error('Push test POST error:', error)
     return NextResponse.json(

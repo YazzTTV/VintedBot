@@ -447,7 +447,45 @@ export async function POST(request: Request) {
               console.log(`✅ [UPDATE VENTE] Acheteur mis à jour rétroactivement pour vente ${existingVente.id} -> ${finalBuyerLogin}`);
           }
         }
-        
+
+        // 🏷️ Génération RÉTROACTIVE du bordereau : pour les ventes DÉJÀ réconciliées qui n'ont
+        // pas encore de bordereau (vendues avant l'activation de l'auto-bordereau, ou dont l'action
+        // a échoué). Idempotent : ne crée rien si un bordereau existe déjà, si la vente est
+        // expédiée/annulée, ou si une action GENERATE_LABEL est déjà PENDING/RUNNING/SUCCESS.
+        if (syncedOrder.articleId && !["cancelled", "Supprimé", "canceled"].includes(syncedOrder.status.toLowerCase())) {
+          try {
+            const vente = await prisma.vente.findUnique({
+              where: { articleId: syncedOrder.articleId },
+              include: { expedition: true }
+            })
+            if (vente && vente.botAccountId && !["EXPEDIEE", "ANNULEE"].includes(vente.statut) && !vente.expedition?.bordereauUrl) {
+              const existingLabelAction = await prisma.botActionQueue.findFirst({
+                where: {
+                  actionType: 'GENERATE_LABEL',
+                  status: { in: ['PENDING', 'RUNNING', 'SUCCESS'] },
+                  payload: { path: ['venteId'], equals: vente.id }
+                }
+              })
+              if (!existingLabelAction) {
+                await prisma.botActionQueue.create({
+                  data: {
+                    botAccountId: vente.botAccountId,
+                    actionType: 'GENERATE_LABEL',
+                    status: 'PENDING',
+                    payload: {
+                      venteId: vente.id,
+                      vintedTransactionId: syncedOrder.id // = transaction_id Vinted
+                    }
+                  }
+                })
+                console.log(`🏷️ [AUTO-BORDEREAU RÉTROACTIF] Action GENERATE_LABEL créée pour la vente ${vente.id}`)
+              }
+            }
+          } catch (e: any) {
+            console.error(`⚠️ [AUTO-BORDEREAU RÉTROACTIF] Échec création action (article ${syncedOrder.articleId}):`, e.message)
+          }
+        }
+
         updatedCount++
       } catch (err: any) {
         console.error(`❌ Échec de l'upsert pour la commande Vinted #${order.id}:`, err.message)
