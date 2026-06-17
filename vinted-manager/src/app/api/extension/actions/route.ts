@@ -51,12 +51,23 @@ export async function GET(request: Request) {
     }
 
     // Récupérer les actions PENDING
-    const actions = await prisma.botActionQueue.findMany({
+    const allActions = await prisma.botActionQueue.findMany({
       where: {
         botAccountId: account.id,
         status: 'PENDING'
       },
       orderBy: { createdAt: 'asc' }
+    })
+
+    // Anti-rate-limit Vinted (code 106 sur les écritures en rafale) : au plus 1 GENERATE_LABEL
+    // par cycle de poll. Les autres restent PENDING pour les cycles suivants → génération étalée.
+    let labelTaken = false
+    const actions = allActions.filter(a => {
+      if (a.actionType === 'GENERATE_LABEL') {
+        if (labelTaken) return false
+        labelTaken = true
+      }
+      return true
     })
 
     // Mettre à jour le statut à RUNNING pour éviter la double exécution concurrente

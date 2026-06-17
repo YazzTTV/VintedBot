@@ -468,8 +468,9 @@ export async function POST(request: Request) {
               vente.dateVente >= recentSaleCutoff
             ) {
               // Anti-spam : pas de nouvelle action si une est déjà PENDING/RUNNING/SUCCESS,
-              // OU si une tentative (même FAILED) date de moins de 30 min → on laisse respirer.
-              const retryCutoff = new Date(Date.now() - 30 * 60 * 1000)
+              // OU si une tentative (même FAILED) date de moins de 5 min → on laisse respirer.
+              // (La génération est déjà étalée par le throttle 1/cycle côté /extension/actions.)
+              const retryCutoff = new Date(Date.now() - 5 * 60 * 1000)
               const existingLabelAction = await prisma.botActionQueue.findFirst({
                 where: {
                   actionType: 'GENERATE_LABEL',
