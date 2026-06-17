@@ -3289,35 +3289,40 @@ async function executeBotAction(tabId, action) {
                     const shipmentId = transaction.shipment?.id;
                     let carrierName = transaction.shipment?.carrier?.name || '';
 
-                    if (!shipmentId) console.warn("⚠️ [GENERATE_LABEL] shipmentId absent — on tente quand même via transactionId");
+                    if (!shipmentId) console.warn("⚠️ [GENERATE_LABEL] shipmentId absent");
 
-                    // Étape 2 : Récupérer le bordereau (méthode Vinteo) via la TRANSACTION.
-                    // Vinted renvoie le PDF en base64 dans { file: { label } } sur /shipment/pdf_label
-                    // (fallback /digital_label). L'ancien endpoint /shipments/{id}/label_url ne renvoyait rien.
-                    const fetchLabel = async (kind) => {
-                        const r = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/${kind}`, {
-                            credentials: "include",
-                            headers: getHeaders(false)
-                        });
-                        if (!r.ok) return { status: r.status, url: null };
+                    // Étape 2 : Récupérer le bordereau (méthode Vinteo = essaie plusieurs endpoints).
+                    let labelUrl = null;
+                    let diag = '';
+
+                    // Endpoint A (prioritaire chez Vinteo) : /api/v2/shipments/{id}/label_url
+                    if (shipmentId) {
+                        try {
+                            const r = await fetch(`/api/v2/shipments/${shipmentId}/label_url`, { credentials: "include", headers: getHeaders(false) });
+                            if (r.ok) {
+                                const k = await r.json();
+                                labelUrl = k.label_url || k.url || (k.shipment && k.shipment.label_url) || (k.label && k.label.url) || null;
+                                if (!labelUrl) diag += `label_url=${JSON.stringify(k).slice(0, 120)} `;
+                            } else { diag += `label_url:HTTP${r.status} `; }
+                        } catch (e) { diag += `label_url:err `; }
+                    }
+
+                    // Endpoints B/C : /shipment/pdf_label puis /digital_label (PDF base64 dans file.label)
+                    const fetchTxLabel = async (kind) => {
+                        const r = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/${kind}`, { credentials: "include", headers: getHeaders(false) });
+                        if (!r.ok) { diag += `${kind}:HTTP${r.status} `; return null; }
                         let d = null;
-                        try { d = await r.json(); } catch (e) { return { status: r.status, url: null }; }
-                        let url = null;
-                        if (d && d.file && d.file.label) {
-                            url = "data:application/pdf;base64," + d.file.label;
-                        } else if (d) {
-                            url = (d.pdf_label && d.pdf_label.url) || d.url ||
-                                  (d.digital_label && (d.digital_label.image_url || d.digital_label.url)) ||
-                                  d.digital_label_url || d.label_url || null;
-                        }
-                        return { status: r.status, url };
+                        try { d = await r.json(); } catch (e) { diag += `${kind}:badjson `; return null; }
+                        let u = null;
+                        if (d && d.file && d.file.label) u = "data:application/pdf;base64," + d.file.label;
+                        else if (d) u = (d.pdf_label && d.pdf_label.url) || d.url || (d.digital_label && (d.digital_label.image_url || d.digital_label.url)) || d.digital_label_url || d.label_url || null;
+                        if (!u) diag += `${kind}=${JSON.stringify(d).slice(0, 120)} `;
+                        return u;
                     };
+                    if (!labelUrl) labelUrl = await fetchTxLabel('pdf_label');
+                    if (!labelUrl) labelUrl = await fetchTxLabel('digital_label');
 
-                    let labelInfo = await fetchLabel('pdf_label');
-                    if (!labelInfo.url) labelInfo = await fetchLabel('digital_label');
-
-                    const labelUrl = labelInfo.url;
-                    if (!labelUrl) throw new Error(`Bordereau indisponible (HTTP ${labelInfo.status}) — pas encore généré par Vinted ?`);
+                    if (!labelUrl) throw new Error(`Bordereau pas encore dispo Vinted. ${diag}`.slice(0, 250));
 
                     // Étape 3 (non-bloquant) : Récupérer le numéro de suivi depuis journey_summary
                     let trackingCode = '';
