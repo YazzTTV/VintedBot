@@ -344,7 +344,9 @@ async function processImageOffscreen(imageBlob) {
  * Si cropPercent <= 0 ou n'est pas un nombre, délègue à processImageOffscreen (anti-hash).
  * @param {Blob} imageBlob L'image à rogner.
  * @param {number} cropPercent Le pourcentage à couper sur chaque bord (0-50). Ex: 5 = 5% gauche + 5% droite + 5% haut + 5% bas.
- * @returns {Blob} L'image rognée et recompressée.
+ *   La zone interne (bords coupés) est ré-étirée aux dimensions d'origine → photo d'apparence
+ *   normale, léger zoom, mais pixels ré-échantillonnés/décalés (casse le hash perceptuel Vinted).
+ * @returns {Blob} L'image crop+ré-étirée, recompressée, aux mêmes dimensions que l'original.
  */
 async function cropImageOffscreen(imageBlob, cropPercent) {
     // Validation : si cropPercent n'est pas un nombre positif, déléguer au comportement anti-hash existant
@@ -374,12 +376,18 @@ async function cropImageOffscreen(imageBlob, cropPercent) {
             return imageBlob;
         }
 
-        // Créer un canvas de la taille finale
-        const canvas = new OffscreenCanvas(srcWidth, srcHeight);
+        // Canvas aux dimensions D'ORIGINE : on garde la même taille de fichier en sortie
+        // → photo d'apparence normale (pas de bordure), juste un léger zoom.
+        const canvas = new OffscreenCanvas(width, height);
         const ctx = canvas.getContext('2d');
 
-        // Dessiner la région rognée sur le nouveau canvas
-        ctx.drawImage(bitmap, srcX, srcY, srcWidth, srcHeight, 0, 0, srcWidth, srcHeight);
+        // Méthode "Vinteo" : on prend la zone interne (bords coupés) et on la RÉ-ÉTIRE
+        // pour remplir la taille d'origine. Cela ré-échantillonne et décale tous les pixels
+        // → casse le hash perceptuel de Vinted (plus détecté comme repost), tout en restant
+        // visuellement proche de l'original à faible pourcentage.
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(bitmap, srcX, srcY, srcWidth, srcHeight, 0, 0, width, height);
 
         // Convertir en Blob JPEG
         const croppedBlob = await canvas.convertToBlob({
@@ -389,7 +397,7 @@ async function cropImageOffscreen(imageBlob, cropPercent) {
 
         bitmap.close();
 
-        console.log(`🔪 Rognage appliqué : ${cropPercent}% sur chaque bord (${width}x${height} -> ${srcWidth}x${srcHeight})`);
+        console.log(`🔪 Crop+ré-étirement ${cropPercent}% : zone interne ${srcWidth}x${srcHeight} ré-étirée en ${width}x${height} (anti-pHash, léger zoom)`);
         return croppedBlob;
     } catch (error) {
         console.warn("⚠️ Échec cropImageOffscreen, retour au blob original :", error);

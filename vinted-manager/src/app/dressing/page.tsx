@@ -87,7 +87,7 @@ export default function DressingPage() {
   const [now, setNow] = useState(() => Date.now())
 
   const [repostForm, setRepostForm] = useState({
-    cropPercent: 0,
+    cropPercent: 5,
     newTitle: "",
     newDescription: "",
     newPrice: "",
@@ -98,7 +98,7 @@ export default function DressingPage() {
   const [duplicateForm, setDuplicateForm] = useState({
     destinationAccount: "",
     asDraft: false,
-    cropPercent: 0
+    cropPercent: 5
   })
 
   // Charger les comptes disponibles
@@ -766,7 +766,7 @@ export default function DressingPage() {
                 <input
                   type="range"
                   min="0"
-                  max="20"
+                  max="10"
                   step="1"
                   value={repostForm.cropPercent}
                   onChange={(e) => setRepostForm({...repostForm, cropPercent: parseInt(e.target.value)})}
@@ -1046,7 +1046,7 @@ export default function DressingPage() {
                 <input
                   type="range"
                   min="0"
-                  max="20"
+                  max="10"
                   step="1"
                   value={duplicateForm.cropPercent}
                   onChange={(e) => setDuplicateForm({...duplicateForm, cropPercent: parseInt(e.target.value)})}
