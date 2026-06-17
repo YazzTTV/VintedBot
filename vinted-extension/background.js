@@ -3277,52 +3277,63 @@ async function executeBotAction(tabId, action) {
                     const { vintedTransactionId } = pay;
                     if (!vintedTransactionId) throw new Error("vintedTransactionId manquant");
 
-                    // Étape 1 : Lire la transaction pour récupérer le shipment
-                    const txRes = await fetch(`/api/v2/transactions/${vintedTransactionId}`, {
+                    // ÉTAPE 1 : Récupérer l'adresse vendeur (seller_address_id) — requise par la génération
+                    const addrRes = await fetch(`/api/v2/user_addresses/default_shipping_address`, { credentials: "include", headers: getHeaders(false) });
+                    if (!addrRes.ok) throw new Error(`Adresse vendeur HTTP ${addrRes.status}`);
+                    const addrData = await addrRes.json();
+                    const a = addrData || {};
+                    const sellerAddressId = a.id || (a.address && a.address.id) || (a.user_address && a.user_address.id) || null;
+                    if (!sellerAddressId) throw new Error("Aucune adresse d'envoi trouvée (seller_address_id)");
+
+                    // ÉTAPE 2 : GÉNÉRER le bordereau — PUT /shipment/order (c'est le clic « Obtenir le bordereau »).
+                    // drop_off_type/label_type = null → envoi standard (pas de point relais à choisir).
+                    const orderRes = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/order`, {
+                        method: "PUT",
                         credentials: "include",
-                        headers: getHeaders(false)
+                        headers: getHeaders(true),
+                        body: JSON.stringify({ seller_address_id: sellerAddressId, drop_off_type: null, label_type: null })
                     });
-                    if (!txRes.ok) throw new Error(`Impossible de lire la transaction ${vintedTransactionId} (HTTP ${txRes.status})`);
-                    const txData = await txRes.json();
-
-                    const transaction = txData.transaction || txData;
-                    const shipmentId = transaction.shipment?.id;
-                    let carrierName = transaction.shipment?.carrier?.name || '';
-
-                    if (!shipmentId) console.warn("⚠️ [GENERATE_LABEL] shipmentId absent");
-
-                    // Étape 2 : Récupérer le bordereau (méthode Vinteo = essaie plusieurs endpoints).
-                    let labelUrl = null;
-                    let diag = '';
-
-                    // Endpoint A (prioritaire chez Vinteo) : /api/v2/shipments/{id}/label_url
-                    if (shipmentId) {
-                        try {
-                            const r = await fetch(`/api/v2/shipments/${shipmentId}/label_url`, { credentials: "include", headers: getHeaders(false) });
-                            if (r.ok) {
-                                const k = await r.json();
-                                labelUrl = k.label_url || k.url || (k.shipment && k.shipment.label_url) || (k.label && k.label.url) || null;
-                                if (!labelUrl) diag += `label_url=${JSON.stringify(k).slice(0, 120)} `;
-                            } else { diag += `label_url:HTTP${r.status} `; }
-                        } catch (e) { diag += `label_url:err `; }
+                    if (!orderRes.ok) {
+                        const t = await orderRes.text().catch(() => '');
+                        throw new Error(`Génération bordereau (order) HTTP ${orderRes.status}: ${t.slice(0, 120)}`);
                     }
 
-                    // Endpoints B/C : /shipment/pdf_label puis /digital_label (PDF base64 dans file.label)
-                    const fetchTxLabel = async (kind) => {
-                        const r = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/${kind}`, { credentials: "include", headers: getHeaders(false) });
-                        if (!r.ok) { diag += `${kind}:HTTP${r.status} `; return null; }
-                        let d = null;
-                        try { d = await r.json(); } catch (e) { diag += `${kind}:badjson `; return null; }
-                        let u = null;
-                        if (d && d.file && d.file.label) u = "data:application/pdf;base64," + d.file.label;
-                        else if (d) u = (d.pdf_label && d.pdf_label.url) || d.url || (d.digital_label && (d.digital_label.image_url || d.digital_label.url)) || d.digital_label_url || d.label_url || null;
-                        if (!u) diag += `${kind}=${JSON.stringify(d).slice(0, 120)} `;
-                        return u;
-                    };
-                    if (!labelUrl) labelUrl = await fetchTxLabel('pdf_label');
-                    if (!labelUrl) labelUrl = await fetchTxLabel('digital_label');
+                    // ÉTAPE 3 : Relire la transaction → shipment.id (créé par la génération) + transporteur
+                    let shipmentId = null;
+                    let carrierName = '';
+                    try {
+                        const txRes = await fetch(`/api/v2/transactions/${vintedTransactionId}`, { credentials: "include", headers: getHeaders(false) });
+                        if (txRes.ok) {
+                            const txData = await txRes.json();
+                            const transaction = txData.transaction || txData;
+                            shipmentId = transaction.shipment?.id ? String(transaction.shipment.id) : null;
+                            carrierName = transaction.shipment?.carrier?.name || transaction.carrier?.name || '';
+                        }
+                    } catch (e) {}
+                    if (!shipmentId) throw new Error("shipmentId introuvable après génération");
 
-                    if (!labelUrl) throw new Error(`Bordereau pas encore dispo Vinted. ${diag}`.slice(0, 250));
+                    // ÉTAPE 4 : Récupérer le PDF (maintenant généré) — label_url puis fallback pdf_label
+                    let labelUrl = null;
+                    let diag = '';
+                    try {
+                        const r = await fetch(`/api/v2/shipments/${shipmentId}/label_url`, { credentials: "include", headers: getHeaders(false) });
+                        if (r.ok) {
+                            const k = await r.json();
+                            labelUrl = k.label_url || k.url || (k.shipment && k.shipment.label_url) || (k.label && k.label.url) || null;
+                            if (!labelUrl) diag += `label_url=${JSON.stringify(k).slice(0, 100)} `;
+                        } else { diag += `label_url:HTTP${r.status} `; }
+                    } catch (e) { diag += `label_url:err `; }
+                    if (!labelUrl) {
+                        try {
+                            const r = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/pdf_label`, { credentials: "include", headers: getHeaders(false) });
+                            if (r.ok) {
+                                const d = await r.json();
+                                if (d && d.file && d.file.label) labelUrl = "data:application/pdf;base64," + d.file.label;
+                                else diag += `pdf_label=${JSON.stringify(d).slice(0, 100)} `;
+                            } else { diag += `pdf_label:HTTP${r.status} `; }
+                        } catch (e) { diag += `pdf_label:err `; }
+                    }
+                    if (!labelUrl) throw new Error(`Label introuvable après génération. ${diag}`.slice(0, 250));
 
                     // Étape 3 (non-bloquant) : Récupérer le numéro de suivi depuis journey_summary
                     let trackingCode = '';
