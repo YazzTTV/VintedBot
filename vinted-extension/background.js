@@ -2999,6 +2999,8 @@ async function executeBotAction(tabId, action) {
 
     const result = await chrome.scripting.executeScript({
         target: { tabId },
+        world: "MAIN", // CRITIQUE : les écritures sensibles (ex: PUT /shipment/order) sont rejetées
+                       // (403 code 106 access_denied) hors du contexte page. Cf récap §6.1.
         func: async (type, pay) => {
             const csrfMeta = document.querySelector('meta[name="csrf-token"]');
             const csrf = csrfMeta ? csrfMeta.content : null;
