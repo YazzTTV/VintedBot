@@ -8,8 +8,7 @@
 credentials.json
 **/secrets/
 
-# --- Données opérationnelles (comptes, listings, archives) ---
-/Accounts/
+# --- Données opérationnelles (listings temporaires à la racine) ---
 /Input_Screenshots/
 /Output_Listings/
 /Products_Archive/
@@ -51,6 +50,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.log
+**/.stfolder/
 
 # --- Prisma local ---
 /prisma/*.db

@@ -4,7 +4,7 @@ import json
 # niche_loader est dans le meme dossier — import tardif pour eviter les imports circulaires
 # (utilise la property niche_def ci-dessous)
 
-BASE_DIR = r"D:\AntiGravity\02 Projects\Business Vinted"
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 ACCOUNTS_ROOT = os.path.join(BASE_DIR, "Accounts")
 BOT_DIR = os.path.join(BASE_DIR, "vinted_bot")
 
