@@ -1,6 +1,6 @@
 # Vinted Manager — Contexte projet (à lire en priorité)
 
-> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-16.
+> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-17.
 > Répondre **toujours en français** (préférence utilisateur).
 >
 > **⚠️ Repo partagé avec un autre dev.** GitHub `https://github.com/YazzTTV/VintedBot` (branche `main`).
@@ -146,3 +146,56 @@ Le local et GitHub avaient **deux implémentations différentes** de la détecti
 - Restaurés à la version GitHub : `src/app/dressing/page.tsx`, `src/app/api/dressing/route.ts`, `src/app/api/extension/sync/metrics/route.ts`.
 - Dans `background.js`, **seule** la fonction `syncVintedItemMetricsToManager` a été remplacée par celle de GitHub (le reste — repost, DM favoris — est resté local). Splice fait par script Node en UTF-8 pour préserver accents/emojis.
 - Tout le reste de notre travail (repost, DM Favoris, dashboard, proxy, auto-annulation) a été conservé puis poussé.
+
+---
+
+## 12. Session 2026-06-17 — Repost crop, Notifications, Auto-bordereau (⚠️ EN COURS)
+
+### État Git / Vercel (fin de session)
+- **GitHub `main`** = HEAD `07e935d`. Tous les commits du jour sont poussés (repo synchro, 0 ahead/0 behind).
+- **Vercel prod** = redéployé depuis le local, alias `https://vinted-manager-flame.vercel.app` → READY.
+- ⚠️ **Réglages temporaires de debug encore en place** (à revoir si besoin) : cooldown bordereau rétroactif = **5 min** (au lieu de 30), throttle = **1 GENERATE_LABEL par cycle de poll**.
+
+### ✅ Repost — crop « façon Vinteo »
+- `cropImageOffscreen` (`vinted-extension/vinted-rest-api.js`) : ne sort plus une image réduite mais **ré-étire la zone interne aux dimensions d'origine** → photo d'apparence normale, léger zoom, pixels ré-échantillonnés → **casse le pHash anti-doublon Vinted**.
+- UI dressing (`page.tsx`) : slider « Recadrage » **défaut 5 %, max 10 %** (repost ET duplication).
+
+### ✅ Notifications push — RÉSOLU et fonctionnel
+- **Mécanisme** : Web Push VAPID. `src/lib/notifications/push.ts` (`sendPush`), abonnements en table Prisma `PushSubscription`, SW `public/sw.js`, UI `PushToggle.tsx`, enregistrement SW dans `DashboardLayout.tsx`.
+- **Bug trouvé** : `VAPID_SUBJECT` manquait sur Vercel → `sendPush` sortait en `[push] VAPID env vars missing`. Symptôme précis : Apple/iPhone renvoyait **403 BadJwtToken** (FCM/Android laxiste passait). En plus, l'ajout via `echo |` mettait un retour-ligne parasite → Apple rejette. **Corrigé** : `VAPID_SUBJECT=mailto:noah.lugagne1@gmail.com` propre sur Vercel (prod). Confirmé reçu sur iPhone.
+- **Amélioration** : le nom du **compte bot** (yazz, clara…) est désormais dans le **titre** de TOUTES les notifs (message, offre, vente, annulation). Voir `sendPush` appelé dans `comptabilite/orders/route.ts` (vente/annulation) et `extension/sync/inbox/route.ts` (message/offre).
+- `sendPush` renvoie maintenant un résumé `{configured,total,sent,failed,results[]}` et `/api/push/test` l'expose (diagnostic par abonnement, statusCode).
+- ⚠️ 2 anciens abonnements FCM (Android, 12/06) traînent en base (envoi OK mais inutiles). Sans impact.
+
+### ✅ Synchro AUTO des ventes — corrigé
+- `syncVintedOrdersToManager()` n'était appelée QUE dans la sync manuelle. Ajoutée dans l'alarme périodique (`background.js`, `METRICS_ALARM`, toutes les 5 min), dans un try/catch isolé. Les ventes remontent désormais seules (dashboard + notif + file d'actions).
+
+### 🟠 Auto-bordereau — flux complet codé, BLOQUÉ sur anti-bot Vinted (à finir demain)
+**Objectif** : à la vente (ou rétroactivement), générer + récupérer le bordereau automatiquement, comme le clic « Obtenir le bordereau ».
+
+**Flux Vinted réel découvert** (capture réseau + reverse de l'extension Vinteo) — le bordereau **n'existe pas tant qu'on ne le génère pas** :
+1. `GET /api/v2/user_addresses/default_shipping_address` → `seller_address_id` (champ `id`).
+2. `PUT /api/v2/transactions/{tx}/shipment/order` body `{seller_address_id, drop_off_type:null, label_type:null}` → **génère** (drop_off/label_type null = envoi standard, pas de point relais à choisir).
+3. `GET /api/v2/transactions/{tx}` → `shipment.id` (créé) + transporteur.
+4. `GET /api/v2/shipments/{shipmentId}/label_url` (fallback `GET /api/v2/transactions/{tx}/shipment/pdf_label` → PDF base64 dans `file.label`).
+
+**Implémentation actuelle** (`background.js`, action `GENERATE_LABEL` dans `executeBotAction`) :
+- `executeBotAction` passe en **`world: "MAIN"`** (écritures sensibles rejetées en monde isolé).
+- **read-first** : lit d'abord le label existant ; **ne fait le PUT que s'il est absent** (re-commander un shipment déjà ordonné = 403). → résout les ventes déjà cliquées manuellement.
+- Côté Manager : action `GENERATE_LABEL` créée auto à la vente (`comptabilite/orders/route.ts`) **et** rétroactivement pour les ventes ≤ 7 j sans bordereau (idempotent). Throttle 1/cycle dans `extension/actions/route.ts`. Upload PDF via `POST /api/expeditions`.
+
+**⚠️ BLOCAGE actuel (à reprendre)** : le PUT `/shipment/order` renvoie **403 `{code:106, access_denied}`** = anti-bot / rate-limit Vinted (récap §6.6) — déclenché par la **rafale** (6+ ventes générées d'un coup toutes les 2 min pendant les tests). Garde-fous ajoutés en fin de session (read-first + throttle 1/cycle + cooldown). **PAS ENCORE VALIDÉ EN SUCCESS.**
+
+**À FAIRE DEMAIN** :
+1. Recharger l'extension, garder un onglet Vinted **yazz** connecté, Synchroniser, puis vérifier en base que `BotActionQueue` (actionType `GENERATE_LABEL`) passe en **`SUCCESS`** et que `Expedition.bordereauUrl` se remplit.
+   - Lecture base (Supabase REST, clés dans `vinted-manager/.env`) : `GET {SUPABASE_URL}/rest/v1/BotActionQueue?actionType=eq.GENERATE_LABEL&order=createdAt.desc&limit=5` (headers apikey + Authorization Bearer = SERVICE_ROLE).
+2. Si **toujours 403 code 106** sur une génération **isolée** (1 seule, pas en rafale) → c'est l'anti-bot sur la requête elle-même : ajouter des **délais humains** avant le PUT, voire un mécanisme de pause type `dmRateLimitUntil`. Ne PAS générer en masse (risque de flag du compte).
+3. Une fois validé : remettre le cooldown rétroactif à **30 min** (`comptabilite/orders/route.ts`).
+
+### 🛒 SHEIN auto-panier — garde-fous (captcha)
+- Le captcha SHEIN « je suis humain » bloque l'auto-panier. Ajouté dans `handleSheinCart` (`background.js`) : **détection captcha → stop net**, et **ne jamais remonter un prix** si l'ajout n'a pas réellement réussi (`trustedPrice`). Décision : sourcing SHEIN **manuel** pour l'instant.
+
+### Pièges/notes du jour
+- **Repo en CRLF** localement alors que le dépôt est en LF (`core.autocrlf=true`). Conséquence : `git status` montre ~26 fichiers « modifiés » qui ne le sont pas vraiment. Toujours vérifier le diff réel avec `git -c core.autocrlf=false diff` et **stager fichier par fichier** ses vraies modifs. `git add` normalise en LF (commits propres).
+- Lecture des secrets / écriture en base prod / `vercel env add` sont **bloqués automatiquement** : ces actions doivent être faites **par l'utilisateur** (commande `! …` ou dashboard Vercel).
+- ⚠️ Le fichier `~/Desktop/bugextension.txt` a contenu des **cookies de session + tokens Vinted** (capture réseau) — à vider, et idéalement se reconnecter à Vinted pour invalider ces tokens.
