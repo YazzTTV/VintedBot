@@ -194,15 +194,79 @@ async function repostItemInPage(tabId, itemId, options = {}) {
         throw new Error("L'onglet n'est plus sur une page Vinted pour le reposte");
     }
 
-    // ===== ÉTAPE A (Service Worker) : lecture article + téléchargement/traitement des photos =====
-    // Le SW a les host_permissions pour fetch en cross-origin le CDN vinted.net (impossible depuis la page).
-    let itemRes = await vintedFetch(`/api/v2/item_upload/items/${itemId}`);
-    if (!itemRes.success) {
-        console.warn("[REPOST] Fallback /items/ (item_upload a échoué)");
-        itemRes = await vintedFetch(`/api/v2/items/${itemId}`);
+    // ===== ÉTAPE A : lecture article (Service Worker puis MAIN fallback) =====
+    // Le SW tente l'API, si Cloudflare bloque ou si 404 (article vendu), on passe le relais à l'onglet.
+    let original = null;
+    try {
+        let itemRes = await vintedFetch(`/api/v2/item_upload/items/${itemId}`);
+        if (itemRes.success) original = itemRes.data.item || itemRes.data;
+    } catch(e) {}
+
+    if (!original) {
+        console.warn("[REPOST] Fallback /items/ via la page MAIN (Cloudflare bypass / Sold items)");
+        const injection = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            func: async (id) => {
+                try {
+                    let r = await fetch(`/api/v2/items/${id}`, { credentials: "include", headers: { "Accept": "application/json" } });
+                    if (r.ok) return await r.json();
+                    
+                    // Fallback scraping pour les articles vendus/supprimés de l'API
+                    console.log("[REPOST MAIN] Fallback API échoué, tentative de scraping HTML...");
+                    r = await fetch(`/items/${id}`);
+                    if (r.ok) {
+                        const html = await r.text();
+                        let match = html.match(/data-component-name="Item"[^>]*>({.*?})<\/script>/is) || 
+                                    html.match(/data-component-name="ItemState"[^>]*>({.*?})<\/script>/is);
+                        if (match && match[1]) {
+                            const parsed = JSON.parse(match[1]);
+                            return parsed.item ? parsed : { item: parsed };
+                        }
+                        const nextMatch = html.match(/<script id="__NEXT_DATA__" type="application\/json">({.*?})<\/script>/is);
+                        if (nextMatch && nextMatch[1]) {
+                            const parsed = JSON.parse(nextMatch[1]);
+                            const pProps = parsed.props?.pageProps;
+                            if (pProps?.item) return { item: pProps.item };
+                            if (pProps?.initialState?.item) return { item: pProps.initialState.item };
+                        }
+                        
+                        // Si l'article est vendu et masqué par Next.js stream, on l'extrait brutalement du HTML
+                        const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]+)"/i);
+                        const brandMatch = html.match(/"brand_id"\s*:\s*(\d+)/i) || html.match(/brand_id\s*:\s*(\d+)/i);
+                        const catalogMatch = html.match(/"catalog_id"\s*:\s*(\d+)/i) || html.match(/catalog_id\s*:\s*(\d+)/i);
+                        
+                        return {
+                            isHtmlFallback: true,
+                            description: descMatch ? descMatch[1] : "",
+                            brand_id: brandMatch ? parseInt(brandMatch[1]) : null,
+                            catalog_id: catalogMatch ? parseInt(catalogMatch[1]) : null
+                        };
+                    }
+                    throw new Error("HTTP " + r.status);
+                } catch(e) {
+                    return { error: e.message };
+                }
+            },
+            args: [itemId]
+        });
+        
+        const resObj = injection?.[0]?.result;
+        if (resObj && !resObj.error) {
+            if (resObj.isHtmlFallback) {
+                if (options.fallbackItem) {
+                    original = Object.assign({}, options.fallbackItem, resObj);
+                } else {
+                    throw new Error("Scraping HTML réussi mais aucun fallbackItem (Wardrobe) fourni pour fusionner.");
+                }
+            } else {
+                original = resObj.item || resObj;
+            }
+        } else {
+            throw new Error(`Lecture article HTTP via MAIN a échoué: ${resObj?.error || "Erreur inconnue"}`);
+        }
     }
-    if (!itemRes.success) throw new Error(`Lecture article HTTP ${itemRes.status}`);
-    const original = itemRes.data.item || itemRes.data;
+    
     if (!original) throw new Error("Format article inconnu lors de la lecture");
     console.log(`🔄 [REPOST] Article lu : "${original.title}"`);
 
@@ -351,7 +415,7 @@ async function repostItemInPage(tabId, itemId, options = {}) {
                         description: options.newDescription != null ? options.newDescription : (original.description || ""),
                         brand_id: original.brand_id,
                         brand: original.brand || original.brand_title,
-                        size_id: original.size_id,
+                        size_id: original.size_id || 3, // Défaut : S
                         catalog_id: original.catalog_id,
                         isbn: original.isbn || null,
                         author: original.author || null,
@@ -359,7 +423,7 @@ async function repostItemInPage(tabId, itemId, options = {}) {
                         model: original.model || null,
                         video_game_rating_id: original.video_game_rating_id || null,
                         is_unisex: original.is_unisex || false,
-                        status_id: original.status_id,
+                        status_id: original.status_id || 2, // Défaut : Neuf sans étiquette
                         price: finalPrice,
                         package_size_id: original.package_size_id,
                         shipment_prices: { domestic: null, international: null },
@@ -1362,13 +1426,18 @@ async function autoRestockRoutine() {
 
                 if (isInstantRestock) {
                     const motif = isHidden ? "Masqué" : "Vendu";
+                    item._restockPriority = isVendu ? 1 : 2;
                     terminalLog(`🔍 [RESTOCK] Article ${motif} éligible immédiatement: "${item.title}"`);
                     itemsToRestock.push(item);
                 } else if (isActive && itemDateTs > 0 && itemDateTs < sevenDaysAgo) {
+                    item._restockPriority = 3;
                     itemsToRestock.push(item);
                 }
             }
         }
+
+        // Tri des articles : d'abord les vendus (1), puis masqués (2), puis > 7 jours (3)
+        itemsToRestock.sort((a, b) => a._restockPriority - b._restockPriority);
 
         if (itemsToRestock.length > 5) {
             terminalLog(`🎯 [RESTOCK] ${itemsToRestock.length} article(s) trouvé(s). Limitation à 5 pour ce cycle.`);
@@ -1386,7 +1455,7 @@ async function autoRestockRoutine() {
                     const itemToRestock = itemsToRestock[i];
                     terminalLog(`🎯 [RESTOCK] Reposte de l'article ${i+1}/${itemsToRestock.length}: "${itemToRestock.title}" (ID: ${itemToRestock.id})...`);
                     try {
-                        const repostResult = await repostItemInPage(optimalTab.id, itemToRestock.id, { deleteAfter: true });
+                        const repostResult = await repostItemInPage(optimalTab.id, itemToRestock.id, { deleteAfter: true, fallbackItem: itemToRestock });
                         terminalLog(`✅ [RESTOCK] Reposte réussi : Nouveau ID -> ${repostResult.newId}`);
                         
                         // Sauvegarder l'ID original pour ne plus jamais le traiter
@@ -1394,6 +1463,13 @@ async function autoRestockRoutine() {
                         await new Promise(resolve => chrome.storage.local.set({ restockedItemIds }, resolve));
                     } catch(err) {
                         terminalLog(`❌ [RESTOCK] Échec pour l'article ${itemToRestock.id}: ${err.message}`);
+                        
+                        // Si l'article est introuvable (404) ou bloqué (403), on le blacklist pour éviter une boucle infinie
+                        if (err.message.includes("404") || err.message.includes("403")) {
+                            terminalLog(`⚠️ [RESTOCK] Article inaccessible (${err.message}). Ajout à la blacklist.`);
+                            restockedItemIds.push(itemToRestock.id);
+                            await new Promise(resolve => chrome.storage.local.set({ restockedItemIds }, resolve));
+                        }
                     }
                     
                     // Delay of 2 minutes (120000ms) between items if it's not the last one

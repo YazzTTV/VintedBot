@@ -1,7 +1,6 @@
 "use client"
 
 import React, { useState, useEffect } from 'react';
-import DashboardLayout from '@/components/DashboardLayout';
 import { RefreshCcw, Copy, ExternalLink, Image as ImageIcon } from 'lucide-react';
 
 export default function BouclePage() {
@@ -60,8 +59,7 @@ export default function BouclePage() {
   }, {});
 
   return (
-    <DashboardLayout>
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-6 max-w-7xl mx-auto space-y-6">
         <div className="flex justify-between items-center bg-white/5 backdrop-blur-lg p-6 rounded-2xl border border-white/10 shadow-xl">
           <div>
             <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent drop-shadow-sm">
@@ -167,6 +165,5 @@ export default function BouclePage() {
           ))}
         </div>
       </div>
-    </DashboardLayout>
   );
 }
