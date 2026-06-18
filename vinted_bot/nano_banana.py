@@ -414,7 +414,9 @@ async def task_hanger(client, source_path, hanger_template_path, output_path, pr
         intermediate = output_path + ".intermediate.png"
         prompt_step1 = (
             f"L'image montre un vetement porte par une personne ({prompt_anglais}).\n"
-            "Genere une photo de ce meme vetement pose sur un cintre, sans personne. Format vertical 3:4."
+            "Genere une photo de ce meme vetement pose sur un cintre, sans personne. "
+            "Le vetement ne porte aucune etiquette, aucune etiquette de col, aucune marque, "
+            "aucun logo ni aucun texte visible. Format vertical 3:4."
         )
         ok = await _nano_generate(client, prompt_step1, [source_path], intermediate,
                                   semaphore, "hanger_step1", postprocess=False)
@@ -426,7 +428,8 @@ async def task_hanger(client, source_path, hanger_template_path, output_path, pr
                 f"Remplace uniquement le vetement de l'image 1 par la robe de l'image 2 "
                 f"({prompt_anglais}). Le cintre de l'image 1 (sa forme, sa couleur, sa matiere) "
                 "et le fond de l'image 1 restent exactement les memes. La robe doit etre identique "
-                "a celle de l'image 2."
+                "a celle de l'image 2. La robe ne porte aucune etiquette, aucune etiquette de col, "
+                "aucune marque, aucun logo ni aucun texte visible."
             )
             return await _nano_generate(client, prompt, inputs, output_path, semaphore, "hanger")
         finally:
@@ -438,7 +441,9 @@ async def task_hanger(client, source_path, hanger_template_path, output_path, pr
         inputs = [source_path]
         prompt = (
             f"L'image montre un vetement porte par une personne ({prompt_anglais}).\n"
-            "Genere une photo de ce meme vetement pose sur un cintre, sans personne. Format vertical 3:4."
+            "Genere une photo de ce meme vetement pose sur un cintre, sans personne. "
+            "Le vetement ne porte aucune etiquette, aucune etiquette de col, aucune marque, "
+            "aucun logo ni aucun texte visible. Format vertical 3:4."
         )
     return await _nano_generate(client, prompt, inputs, output_path, semaphore, "hanger")
 

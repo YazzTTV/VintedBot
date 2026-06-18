@@ -188,8 +188,8 @@ def list_available_accounts():
     if not os.path.exists(ACCOUNTS_ROOT):
         return []
     
-    # Comptes inactifs sur ce PC
-    ignored_accounts = {"emma", "margaux", "ninapython"}
+    # Comptes inactifs sur ce PC (vide : tous les comptes presents sont actifs)
+    ignored_accounts = set()
     
     return [
         d for d in os.listdir(ACCOUNTS_ROOT) 

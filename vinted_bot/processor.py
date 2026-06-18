@@ -5,8 +5,17 @@ ce qui evite les limites du free tier.
 """
 import json
 import re
-from playwright.sync_api import sync_playwright
-from edge_browser import start_edge, open_gemini_page, upload_files, type_and_send, wait_for_response, get_last_response_text
+
+# Imports legacy de l'ancienne version "Gemini Web" (Playwright + Edge CDP).
+# L'analyse passe desormais par l'API Gemini native (google-genai) et n'en a plus
+# besoin. On les rend optionnels pour ne pas casser l'import si playwright/edge_browser
+# sont absents, tout en preservant les noms si du code legacy les utilise encore.
+try:
+    from playwright.sync_api import sync_playwright
+    from edge_browser import start_edge, open_gemini_page, upload_files, type_and_send, wait_for_response, get_last_response_text
+except Exception:
+    sync_playwright = None
+    start_edge = open_gemini_page = upload_files = type_and_send = wait_for_response = get_last_response_text = None
 
 PROMPT_ANALYSE = """{PERSONA}
 Je te donne une capture d'ecran d'un vetement sur un site e-commerce (Shein).

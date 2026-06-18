@@ -77,9 +77,10 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
         
     # Liste des images humanisées (ou brutes si non humanisées)
     images = []
-    image_names = ["selfie_upscaled.jpg", "profile_upscaled.jpg", "selfie_hand_in_hair_upscaled.jpg", "flat_lay_upscaled.jpg", "hanger_upscaled.jpg", "folded_upscaled.jpg"]
+    # Ordre d'affichage VOULU sur Vinted : selfie -> profil (cote) -> cintre, puis le reste.
+    image_names = ["selfie_upscaled.jpg", "profile_upscaled.jpg", "hanger_upscaled.jpg", "selfie_hand_in_hair_upscaled.jpg", "flat_lay_upscaled.jpg", "folded_upscaled.jpg"]
     # Fallbacks si pas d'image upscalée
-    fallback_names = ["selfie.jpg", "profile.jpg", "selfie_hand_in_hair.jpg", "flat_lay.jpg", "hanger.jpg", "folded.jpg"]
+    fallback_names = ["selfie.jpg", "profile.jpg", "hanger.jpg", "selfie_hand_in_hair.jpg", "flat_lay.jpg", "folded.jpg"]
     
     for name in image_names:
         img_path = os.path.join(product_dir, name)
@@ -92,18 +93,18 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
             if os.path.exists(img_path):
                 images.append(img_path)
                 
-    # Si toujours rien, on liste toutes les images du dossier
+    # Si toujours rien, on liste toutes les images du dossier (trie ici pour rester deterministe)
     if not images:
         for f in os.listdir(product_dir):
             if f.lower().endswith(('.jpg', '.jpeg', '.png')):
                 images.append(os.path.join(product_dir, f))
-                
+        images.sort()
+
     if not images:
         print(f"[Publisher] [ERROR] Aucune image trouvée dans {product_dir}")
         return False
-        
-    # Trier les images pour avoir un ordre cohérent (selfie d'abord)
-    images.sort()
+
+    # PAS de sort() ici : l'ordre vient de image_names (selfie -> profil -> cintre).
     
     # Force tous les uploads sur vinted.fr, peu importe la langue de description
     domain = "vinted.fr"
@@ -145,8 +146,14 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
             print(f"[Publisher] Navigation vers Vinted ({target_url})...")
             page.goto(target_url, timeout=60000)
             
-            # Attente de la page d'upload
-            page.wait_for_load_state("networkidle")
+            # Attente de la page d'upload.
+            # NB: "networkidle" ne se declenche jamais sur Vinted (connexions persistantes)
+            # -> on attend domcontentloaded puis un court delai. L'etape upload attend
+            # ensuite explicitement l'input file.
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=30000)
+            except Exception:
+                pass
             time.sleep(3)
             
             # --- ÉTAPE 1 : Upload des images ---
@@ -258,7 +265,7 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
                 print(f"[Publisher] [WARN] Erreur couleur : {color_err}")
             
             # --- ÉTAPE 4 : Prix ---
-            price = "50"  # Prix par défaut pour le MVP
+            price = "55"  # Prix par défaut pour le MVP
             print(f"[Publisher] Remplissage du Prix : {price}€")
             price_input = page.locator('input[name="price"], input[id="price"], [placeholder="0,00"]').first
             if price_input.is_visible():
@@ -267,13 +274,13 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
             
             # --- ÉTAPE 5 : Condition/État ---
             # Par défaut, on choisit "Neuf sans étiquette" ou "Neuf avec étiquette" (Neuf / New)
-            print("[Publisher] Sélection de l'état (Neuf sans étiquette / Très bon état)...")
+            print("[Publisher] Sélection de l'état (Très bon état)...")
             condition_selectors = [
-                'span:has-text("Neuf sans étiquette")',
-                'span:has-text("Nieuw zonder prijskaartje")',
-                'div[role="radio"]:has-text("Neuf")',
-                'text="Neuf sans étiquette"',
-                'text="Nieuw zonder prijskaartje"'
+                'span:has-text("Très bon état")',
+                'span:has-text("Zeer goede staat")',
+                'div[role="radio"]:has-text("Très bon état")',
+                'text="Très bon état"',
+                'text="Zeer goede staat"'
             ]
             
             # Cliquer d'abord sur le champ d'état pour ouvrir les options si nécessaire
@@ -394,8 +401,13 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
             
             if auto_submit or save_draft:
                 print(f"[Publisher] Retour a la page d'accueil pour le compte {account_name}...")
-                page.goto(f"https://www.vinted.fr/?bot_profile={account_name.lower()}")
-                time.sleep(2)
+                # Navigation de courtoisie post-sauvegarde : ne doit PAS faire echouer la fonction
+                # (Vinted redirige souvent -> ERR_ABORTED inoffensif).
+                try:
+                    page.goto(f"https://www.vinted.fr/?bot_profile={account_name.lower()}", timeout=15000)
+                    time.sleep(2)
+                except Exception:
+                    pass
                 
             # Créer un marqueur de succès pour éviter les doublons à l'avenir
             try:

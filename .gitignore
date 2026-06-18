@@ -42,6 +42,13 @@ next-env.d.ts
 /vinted_bot/debug_*.png
 /vinted_bot/risk_page_content.html
 /vinted_bot/raw_response.txt
+# Sorties de generation d'annonces (images IA temporaires par compte)
+/vinted_bot/_test_out_*/
+/vinted_bot/test_nano_selfie.jpg
+# Dossier dezippe duplique a la racine
+/VintedBot-main/
+# Dossiers de profils Brave dedies (sessions) - ne jamais committer
+/BraveBot/
 
 # --- OS & IDE ---
 .DS_Store
