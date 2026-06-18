@@ -22,7 +22,8 @@ import {
   ShieldAlert,
   MessageCircleHeart,
   Network,
-  Terminal
+  Terminal,
+  RefreshCcw
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import PushToggle from "@/components/PushToggle"
@@ -41,6 +42,7 @@ const navigationGroups = [
     items: [
       { name: 'Dressing 👗', href: '/dressing', icon: Shirt },
       { name: 'Winners 🔥', href: '/winners', icon: Flame },
+      { name: 'Boucle 🔁', href: '/boucle', icon: RefreshCcw },
       { name: 'Archives', href: '/archives', icon: Archive },
     ]
   },

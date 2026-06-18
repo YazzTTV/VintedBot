@@ -39,7 +39,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
   // Format the data for the graph
   const graphData = useMemo(() => {
     const nodes: any[] = [
-      { id: 'central-manager', name: 'VINTED CORE', group: 0, val: 12 } // Central Node
+      { id: 'central-manager', name: 'VINTED CORE', group: 0, val: 12, fx: 0, fy: 0 } // Central Node anchored at origin
     ];
     const links: any[] = [];
     
@@ -135,7 +135,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
       // Set fixed link distance and heavily increase link strength so it doesn't get overpowered by repulsion
       fgRef.current.d3Force('link')
         .distance((link: any) => link.distance || 30)
-        .strength(1); // Force absolute adherence to the distance
+        .strength(1); // Restored absolute adherence to fix the layout
         
       // Increase global repulsion to prevent overlapping the central node
       const chargeForce = fgRef.current.d3Force('charge');
@@ -145,7 +145,7 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
           if (node.group === 0) return -2000; // HUGE repulsion for central node
           if (node.group === 1) return -500;  // Bots push things away strongly
           return -150; // Normal repulsion for articles and clients
-        }).distanceMax(300);
+        }).distanceMax(300); // Restored to 300 to allow proper cluster spacing
       }
     }
   }, [graphData]);
@@ -390,9 +390,8 @@ export default function NetworkGraph({ bots }: NetworkGraphProps) {
         linkDirectionalParticleColor={(link: any) => link.color.replace('0.3', '1').replace('0.4', '1').replace('0.1', '1')}
         
         // Force engine setup
-        d3VelocityDecay={0.4}
+        d3VelocityDecay={0.6} // Increased from 0.4 to 0.6 to dampen jitter without breaking layout
         warmupTicks={100}
-        cooldownTicks={0}
       />
 
       {/* Interactive Side Panels */}

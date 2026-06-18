@@ -35,27 +35,7 @@ document.addEventListener('DOMContentLoaded', () => {
         chrome.alarms.getAll((alarms) => {
             const now = Date.now();
             
-            // 1. Ghost Scan (Likes / Marketing)
-            const ghostAlarm = alarms.find(a => a.name === 'vintedGhostAlarm');
-            if (ghostAlarm) {
-                const diff = Math.max(0, ghostAlarm.scheduledTime - now);
-                const mins = Math.floor(diff / 60000);
-                const secs = Math.floor((diff % 60000) / 1000);
-                
-                chrome.storage.local.get(['botActive'], (res) => {
-                    if (res.botActive) {
-                        ghostTimer.innerHTML = `<span>🎲</span> Cycle : <b>${mins}m ${secs.toString().padStart(2, '0')}s</b>`;
-                        ghostTimer.className = 'timer-badge active-timer';
-                    } else {
-                        ghostTimer.innerHTML = `<span>😴</span> Bot inactif (Sommeil)`;
-                        ghostTimer.className = 'timer-badge';
-                    }
-                });
-            } else {
-                ghostTimer.innerHTML = `<span>🎲</span> Cycle : planification...`;
-                ghostTimer.className = 'timer-badge';
-            }
-
+            // 1. Ghost Scan (Devenu Instantané)
             // 2. Synchronisation (Metrics / Dressing / Inbox)
             const syncAlarm = alarms.find(a => a.name === 'vintedSyncAlarm');
             if (syncAlarm) {
@@ -70,26 +50,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 syncTimer.className = 'timer-badge';
             }
 
-            // 3. Moteur conversationnel IA (Gemini Flash)
-            const geminiAlarm = alarms.find(a => a.name === 'vintedGeminiAlarm');
-            if (geminiAlarm && geminiTimer) {
-                const diff = Math.max(0, geminiAlarm.scheduledTime - now);
-                const mins = Math.floor(diff / 60000);
-                const secs = Math.floor((diff % 60000) / 1000);
-                
-                chrome.storage.local.get(['botActive'], (res) => {
-                    if (res.botActive) {
-                        geminiTimer.innerHTML = `<span>🔮</span> IA : <b>${mins}m ${secs.toString().padStart(2, '0')}s</b>`;
-                        geminiTimer.className = 'timer-badge active-timer';
-                    } else {
-                        geminiTimer.innerHTML = `<span>😴</span> IA inactive (Sommeil)`;
-                        geminiTimer.className = 'timer-badge';
-                    }
-                });
-            } else if (geminiTimer) {
-                geminiTimer.innerHTML = `<span>🔮</span> IA : planification...`;
-                geminiTimer.className = 'timer-badge';
-            }
+            // 3. Moteur conversationnel IA (Devenu Instantané)
+
 
             // 4. Warm-up (Auto-Like / Activité passive)
             if (!isAutoLikeRunning && likeTimer) {
@@ -121,6 +83,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     likeTimer.innerHTML = `<span>❤️</span> Warm-up : planification...`;
                     likeTimer.className = 'timer-badge';
+                }
+            }
+            // 5. Restock J+7
+            const restockAlarm = alarms.find(a => a.name === 'vintedRestockAlarm');
+            const restockTimer = document.getElementById('restock-timer');
+            if (restockTimer) {
+                if (restockAlarm) {
+                    const diff = Math.max(0, restockAlarm.scheduledTime - now);
+                    const totalMins = Math.floor(diff / 60000);
+                    const mins = totalMins % 60;
+                    const hours = Math.floor(totalMins / 60);
+                    const secs = Math.floor((diff % 60000) / 1000);
+                    
+                    let timeStr = hours > 0 ? `${hours}h ${mins}m ${secs.toString().padStart(2, '0')}s` : `${mins}m ${secs.toString().padStart(2, '0')}s`;
+                    restockTimer.innerHTML = `<span>♻️</span> Restock : <b>${timeStr}</b>`;
+                    restockTimer.className = 'timer-badge active-timer';
+                } else {
+                    restockTimer.innerHTML = `<span>♻️</span> Restock : planification...`;
+                    restockTimer.className = 'timer-badge';
                 }
             }
         });
@@ -321,6 +302,33 @@ document.addEventListener('DOMContentLoaded', () => {
                     autoLikeBtn.innerHTML = originalText;
                     autoLikeBtn.className = "btn btn-secondary";
                     updateTimers(); // Actualisation immédiate du timer
+                }, 4000);
+            });
+        });
+    }
+
+    const autoRestockBtn = document.getElementById('auto-restock-btn');
+    if (autoRestockBtn) {
+        autoRestockBtn.addEventListener('click', () => {
+            const originalText = autoRestockBtn.innerHTML;
+            autoRestockBtn.innerHTML = "<span>⌛</span> Lancement...";
+            autoRestockBtn.disabled = true;
+
+            chrome.runtime.sendMessage({ action: "forceRestock" }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Error:", chrome.runtime.lastError.message);
+                    autoRestockBtn.innerHTML = "<span>⚠️</span> Service HS";
+                    autoRestockBtn.className = "btn btn-danger";
+                } else {
+                    autoRestockBtn.innerHTML = "<span>✅</span> Restock Forcé !";
+                    autoRestockBtn.className = "btn btn-success";
+                }
+                
+                setTimeout(() => {
+                    autoRestockBtn.disabled = !isBotActive;
+                    autoRestockBtn.innerHTML = originalText;
+                    autoRestockBtn.className = "btn btn-secondary";
+                    updateTimers();
                 }, 4000);
             });
         });

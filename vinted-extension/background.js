@@ -410,6 +410,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(err => sendResponse({ success: false, error: err.message }));
         return true; // Indique une réponse asynchrone
     }
+    
+    // ACTION UI : Forcer l'auto-restock J+7
+    if (request.action === "forceRestock") {
+        autoRestockRoutine()
+            .then(() => sendResponse({ success: true }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
     // PONT REST API : Lancer un reposte furtif d'un article (via contexte page same-origin)
     if (request.action === "repostItemREST") {
         (async () => {
@@ -1224,6 +1232,7 @@ const POLL_ALARM_A = "vintedPollAlarmA";
 const POLL_ALARM_B = "vintedPollAlarmB";
 const WARMUP_ALARM_NAME = "vintedWarmupAlarm";
 const METRICS_ALARM_NAME = "vintedSyncAlarm";
+const RESTOCK_ALARM_NAME = "vintedRestockAlarm";
 
 // Initialisation intelligente des alarmes (anti-reset au réveil du SW)
 chrome.alarms.getAll((alarms) => {
@@ -1241,6 +1250,10 @@ chrome.alarms.getAll((alarms) => {
     if (!alarms.find(a => a.name === WARMUP_ALARM_NAME)) {
         const randomDelay = 120 + Math.random() * 60;
         chrome.alarms.create(WARMUP_ALARM_NAME, { delayInMinutes: randomDelay });
+    }
+    if (!alarms.find(a => a.name === RESTOCK_ALARM_NAME)) {
+        // Alarme Restock J+7: s'exécute toutes les 4 heures (240 min)
+        chrome.alarms.create(RESTOCK_ALARM_NAME, { delayInMinutes: 5, periodInMinutes: 240 });
     }
 });
 
@@ -1279,7 +1292,128 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         const randomDelay = 120 + Math.random() * 60;
         chrome.alarms.create(WARMUP_ALARM_NAME, { delayInMinutes: randomDelay });
     }
+
+    if (alarm.name === RESTOCK_ALARM_NAME) {
+        console.log("⏰ [ALARM] Lancement de l'Auto-Restock (J+7)...");
+        autoRestockRoutine().catch(err => console.error("❌ Erreur Auto-Restock :", err));
+    }
 });
+
+// === ROUTINE DE RESTOCK J+7 ===
+let isRestockRoutineRunning = false;
+
+async function autoRestockRoutine() {
+    if (isRestockRoutineRunning) return;
+    isRestockRoutineRunning = true;
+    try {
+        terminalLog("🔄 [RESTOCK] Début du scan auto-restock J+7...");
+        const optimalTab = await getOptimalVintedTab();
+        if (!optimalTab) {
+            terminalLog("⚠️ [RESTOCK] Aucun onglet Vinted ouvert, annulation.");
+            return;
+        }
+
+        const userRes = await fetchUserIdentityDirect(optimalTab.id);
+        if (!userRes || !userRes.success || !userRes.id) {
+            terminalLog("⚠️ [RESTOCK] Impossible de récupérer l'identité, annulation.");
+            return;
+        }
+
+        // Récupération des IDs déjà restockés pour éviter les boucles (surtout pour les Vendus qu'on ne peut pas supprimer)
+        const storageRes = await new Promise(resolve => chrome.storage.local.get(['restockedItemIds'], resolve));
+        const restockedItemIds = storageRes.restockedItemIds || [];
+
+        // Fetch user items (via Wardrobe API to bypass Cloudflare protection)
+        const itemsRes = await vintedFetch(`/api/v2/wardrobe/${userRes.id}/items?per_page=96&order=relevance`);
+        if (!itemsRes || !itemsRes.success) {
+            terminalLog("❌ [RESTOCK] Échec de la récupération des articles du profil (Wardrobe).");
+            return;
+        }
+
+        const items = itemsRes.data.items || itemsRes.data || [];
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        let itemsToRestock = [];
+        
+        terminalLog(`📊 [DEBUG] Wardrobe scanné: ${items.length} articles.`);
+        if (items.length > 0) {
+            const dump = items.slice(0, 5).map(i => `[ID:${i.id}|status_id:${i.status_id}|is_sold:${i.is_sold}|created_at_ts:${i.created_at_ts}|updated_at_ts:${i.updated_at_ts}|created_at:${i.created_at}]`);
+            terminalLog(`🔍 [DEBUG DUMP] 5 premiers articles: ${dump.join(" --- ")}`);
+        }
+
+        for (const item of items) {
+            if (restockedItemIds.includes(item.id)) continue; // Déjà traité précédemment
+
+            // Détection précise des statuts
+            const isHidden = item.is_hidden || item.status_id === 2 || String(item.status).toLowerCase() === "hidden" || String(item.status).toLowerCase() === "masqué";
+            const isVendu = item.is_sold || item.status_id === 3 || item.status_id === 4 || item.status_id === 6 || String(item.status).toLowerCase() === "vendu" || String(item.status).toLowerCase() === "sold" || (item.is_closed && !isHidden);
+            
+            const isInstantRestock = isVendu || isHidden;
+            const isActive = !isInstantRestock; // Tout le reste est considéré comme actif
+
+            if (isActive || isInstantRestock) {
+                // Stratégie Wardrobe: utiliser le timestamp de la première photo car created_at_ts est absent
+                let ts = item.created_at_ts;
+                if (!ts && item.photos && item.photos.length > 0 && item.photos[0].high_resolution) {
+                    ts = item.photos[0].high_resolution.timestamp;
+                }
+                if (!ts && item.updated_at_ts) ts = item.updated_at_ts;
+                if (!ts && item.created_at) ts = Math.floor(new Date(item.created_at).getTime() / 1000);
+                const itemDateTs = ts ? (ts * 1000) : 0;
+
+                if (isInstantRestock) {
+                    const motif = isHidden ? "Masqué" : "Vendu";
+                    terminalLog(`🔍 [RESTOCK] Article ${motif} éligible immédiatement: "${item.title}"`);
+                    itemsToRestock.push(item);
+                } else if (isActive && itemDateTs > 0 && itemDateTs < sevenDaysAgo) {
+                    itemsToRestock.push(item);
+                }
+            }
+        }
+
+        if (itemsToRestock.length > 5) {
+            terminalLog(`🎯 [RESTOCK] ${itemsToRestock.length} article(s) trouvé(s). Limitation à 5 pour ce cycle.`);
+            itemsToRestock = itemsToRestock.slice(0, 5);
+        }
+
+        if (itemsToRestock.length > 0) {
+            terminalLog(`🎯 [RESTOCK] Début du reposte séquentiel de ${itemsToRestock.length} article(s)...`);
+            
+            // Keep SW alive if we have multiple items (ping every 20s)
+            let keepAliveRestock = setInterval(() => { chrome.runtime.getPlatformInfo(() => {}); }, 20000);
+
+            try {
+                for (let i = 0; i < itemsToRestock.length; i++) {
+                    const itemToRestock = itemsToRestock[i];
+                    terminalLog(`🎯 [RESTOCK] Reposte de l'article ${i+1}/${itemsToRestock.length}: "${itemToRestock.title}" (ID: ${itemToRestock.id})...`);
+                    try {
+                        const repostResult = await repostItemInPage(optimalTab.id, itemToRestock.id, { deleteAfter: true });
+                        terminalLog(`✅ [RESTOCK] Reposte réussi : Nouveau ID -> ${repostResult.newId}`);
+                        
+                        // Sauvegarder l'ID original pour ne plus jamais le traiter
+                        restockedItemIds.push(itemToRestock.id);
+                        await new Promise(resolve => chrome.storage.local.set({ restockedItemIds }, resolve));
+                    } catch(err) {
+                        terminalLog(`❌ [RESTOCK] Échec pour l'article ${itemToRestock.id}: ${err.message}`);
+                    }
+                    
+                    // Delay of 2 minutes (120000ms) between items if it's not the last one
+                    if (i < itemsToRestock.length - 1) {
+                        terminalLog(`⏳ [RESTOCK] Attente de 2 minutes avant le prochain article...`);
+                        await new Promise(r => setTimeout(r, 120000));
+                    }
+                }
+            } finally {
+                clearInterval(keepAliveRestock);
+            }
+        } else {
+            terminalLog("✅ [RESTOCK] Aucun article de plus de 7 jours trouvé.");
+        }
+    } catch (e) {
+        terminalLog(`❌ [RESTOCK] Erreur globale lors de la routine de restock : ${e.message}`);
+    } finally {
+        isRestockRoutineRunning = false;
+    }
+}
 
 // === ROUTINE DE POLLING API PRINCIPALE ===
 let isPollingRoutineRunning = false;
