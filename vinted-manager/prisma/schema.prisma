@@ -107,6 +107,7 @@ model BotAccount {
   balancePending   Decimal?             @default(0) @db.Decimal(10, 2)
   balanceAvailable Decimal?             @default(0) @db.Decimal(10, 2)
   lastSync         DateTime?
+  accountType      AccountType          @default(TEST)
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
   actions          BotActionQueue[]
@@ -115,6 +116,7 @@ model BotAccount {
   conversations    VintedConversation[]
   metrics          VintedItemMetrics[]
   orders           VintedOrderSynced[]
+  winnerQueue      WinnerQueue[]
 }
 
 model VintedOrderSynced {
@@ -224,6 +226,19 @@ model ParcelEvent {
   stage       String?
   createdAt   DateTime       @default(now())
   parcel      ParcelTracking @relation(fields: [parcelId], references: [id], onDelete: Cascade)
+}
+
+model WinnerQueue {
+  id               String       @id @default(uuid())
+  botAccountId     String
+  title            String
+  sourcingUrl      String?
+  originalPhotoUrl String?
+  lastPublishedAt  DateTime?
+  status           QueueStatus  @default(QUEUED)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  botAccount       BotAccount   @relation(fields: [botAccountId], references: [id])
 }
 
 model ExtensionLog {
@@ -349,4 +364,14 @@ enum ParcelStatus {
   RETOUR
   INCIDENT
   INCONNU
+}
+
+enum AccountType {
+  TEST
+  VENTE
+}
+
+enum QueueStatus {
+  QUEUED
+  ACTIVE
 }
