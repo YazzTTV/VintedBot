@@ -209,8 +209,25 @@ async function repostItemInPage(tabId, itemId, options = {}) {
         const snapStore = await chrome.storage.local.get(snapKey);
         if (snapStore && snapStore[snapKey] && snapStore[snapKey].item) {
             original = snapStore[snapKey].item;
-            console.log("📸 [REPOST] Article retiré de Vinted (vendu) → snapshot sauvegardé utilisé.");
+            console.log("📸 [REPOST] Article retiré de Vinted (vendu) → snapshot local utilisé.");
         }
+    }
+
+    // Fallback Manager : snapshot persisté côté serveur (survit à un reload/réinstall de l'extension).
+    if (!original) {
+        try {
+            const cfg = await getManagerApiUrl();
+            let base = cfg.includes("vercel.app") ? cfg.replace("/api/comptabilite/balance", "") : cfg.replace(/\/api\/.*$/, "");
+            base = base.replace(/\/+$/, "");
+            const r = await fetch(`${base}/api/extension/snapshot?itemId=${itemId}`);
+            if (r.ok) {
+                const j = await r.json();
+                if (j && j.snapshot) {
+                    original = j.snapshot;
+                    console.log("📸 [REPOST] Snapshot récupéré depuis le Manager.");
+                }
+            }
+        } catch (e) { console.warn("📸 [REPOST] fetch snapshot Manager échoué:", e.message); }
     }
 
     if (!original) {
@@ -3038,6 +3055,24 @@ async function snapshotActiveItems(tabId, mappedItems) {
         await chrome.storage.local.set(toStore);
         console.log(`📸 [SNAPSHOT] ${n} snapshot(s) stocké(s) localement.`);
         saveLog(`📸 ${n} article(s) sauvegardé(s) (repost après vente)`);
+
+        // Persistance côté Manager (survit à un reload/réinstall de l'extension ou changement de PC).
+        try {
+            const cfg = await getManagerApiUrl();
+            let base = cfg.includes("vercel.app") ? cfg.replace("/api/comptabilite/balance", "") : cfg.replace(/\/api\/.*$/, "");
+            base = base.replace(/\/+$/, "");
+            const items = Object.keys(snaps)
+                .filter(id => snaps[id] && (snaps[id].photos || []).length)
+                .map(id => ({ vintedItemId: id, payload: snaps[id] }));
+            if (items.length) {
+                await fetch(`${base}/api/extension/snapshot`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ items })
+                });
+                console.log(`📸 [SNAPSHOT] ${items.length} snapshot(s) envoyé(s) au Manager.`);
+            }
+        } catch (e) { console.warn("📸 [SNAPSHOT] envoi Manager échoué:", e.message); }
     }
 }
 

@@ -184,6 +184,16 @@ model VintedItemMetrics {
   botAccount       BotAccount @relation(fields: [botAccountId], references: [id])
 }
 
+// Snapshot complet d'un article ACTIF (photos full-size + attributs), capture par l'extension
+// pour permettre le repost APRES vente (Vinted retire les articles vendus de son API).
+model ItemSnapshot {
+  vintedItemId String   @id
+  account      String?
+  payload      Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 model BotActionQueue {
   id           String     @id @default(uuid())
   botAccountId String
