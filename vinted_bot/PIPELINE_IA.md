@@ -64,6 +64,20 @@ Tous sur le **port CDP 9220** (une instance Brave, plusieurs fenêtres de profil
 - **Ne PAS copier les profils Brave** dans des user-data-dir séparés : se reconnecter au même compte depuis un profil copié = « nouvelle machine » → **Vinted invalide la session d'origine**. (Tentative « Option B » abandonnée pour ça.)
 - Fermeture gracieuse de Brave inopérante (taskkill inefficace) → force-kill, qui peut perdre une session fraîche non flushée. Donc : connecter PUIS publier sans tuer Brave entre les deux.
 
-## 8. Validé
+## 8. Repost des articles VENDUS (2026-06-19)
+
+**Problème** : une fois un article vendu, **Vinted le retire de son API** (`/api/v2/items/{id}` → 404, la transaction porte `removed_item_title`). Impossible donc de copier un vendu depuis Vinted (plus de photos/catégorie). Même approche que Vinteo : **snapshot avant la vente**.
+
+- **`vinted-extension/background.js`** :
+  - `snapshotActiveItems()` : à chaque sync du dressing, sauvegarde les données complètes des articles **actifs** (via `/api/v2/item_upload/items/{id}` : photos full-size + catalog/size/brand/color/package/status) dans `chrome.storage.local` (`vb_snapshot_<id>`). Rate-limité : 8/cycle, seulement les non-encore-sauvegardés, délais humains. **Envoie aussi** chaque snapshot au Manager.
+  - `repostItemInPage()` : ordre de lecture = API live → **snapshot local** → **snapshot Manager** → scraping HTML (fallback associé) → erreur. Photos re-téléchargées du CDN (qui survit à la vente, testé).
+- **`vinted-manager`** : modèle Prisma **`ItemSnapshot`** (`vintedItemId`, `payload`, `account`) + route **`POST/GET /api/extension/snapshot`** (upsert lot + lecture par id). → persistance durable (survit reload/réinstall extension, changement de PC).
+- **UI `dressing/page.tsx`** : repost + dupliquer disponibles sur l'onglet **« Vendu »** ; `deleteAfter=false` pour les vendus (Vinted refuse de supprimer une vente).
+- **`manifest.json`** : permission `unlimitedStorage`.
+- ⚠️ **Limite** : ne marche que pour les articles vus **actifs APRÈS** activation du snapshot (les articles vendus avant n'ont aucun snapshot → non repostables).
+- ⚠️ Le repost s'exécute dans l'onglet du compte « optimal » (la file `/api/extension/actions` est interrogée pour le compte de cet onglet) → garder le bon compte ouvert/actif.
+
+## 9. Validé
 
 - 5 comptes : 3 images générées par compte + annonce en brouillon (produit test « robe verte », puis produit « robe blanche dos nu »). Catégorie auto-détectée par Vinted, titres FR/NL selon le compte. ✅
+- Repost vendus : UI déployée (Vercel prod), snapshots créés et vérifiés (données complètes + photos CDN OK), route Manager `/api/extension/snapshot` live (testée). Test end-to-end réel = à la prochaine vente d'un article snapshotté. ✅
