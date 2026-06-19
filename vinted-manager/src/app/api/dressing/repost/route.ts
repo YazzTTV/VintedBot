@@ -121,6 +121,8 @@ export async function POST(request: Request) {
         newDescription: item.newDescription ?? null,
         newPrice: item.newPrice ?? null,
         photoOrder: item.photoOrder ?? null,
+        // false pour un article vendu (Vinted refuse de supprimer une vente) -> on cree juste une nouvelle annonce
+        deleteAfter: item.deleteAfter ?? true,
         delayBeforeMs
       }
 

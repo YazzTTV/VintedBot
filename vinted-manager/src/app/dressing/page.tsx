@@ -44,6 +44,7 @@ interface RepostItem {
   newDescription: string | null
   newPrice: number | null
   photoOrder: null
+  deleteAfter: boolean
 }
 
 interface Toast {
@@ -252,14 +253,22 @@ export default function DressingPage() {
 
     setRepostLoading(true)
     try {
-      const repostItems: RepostItem[] = Array.from(selectedItems).map(itemId => ({
-        itemId,
-        cropPercent: repostForm.cropPercent,
-        newTitle: repostForm.newTitle || null,
-        newDescription: repostForm.newDescription || null,
-        newPrice: repostForm.newPrice ? parseFloat(repostForm.newPrice) : null,
-        photoOrder: null
-      }))
+      const repostItems: RepostItem[] = Array.from(selectedItems).map(itemId => {
+        // Un article vendu ne peut pas etre supprime par Vinted (transaction liee).
+        // -> deleteAfter=false : on garde la vente intacte et on cree juste une nouvelle annonce.
+        const it = items.find(x => x.id === itemId)
+        const s = (it?.status || '').toLowerCase()
+        const isVendu = s === 'vendu' || s === 'sold' || s === 'venduto' || s === 'verkocht'
+        return {
+          itemId,
+          cropPercent: repostForm.cropPercent,
+          newTitle: repostForm.newTitle || null,
+          newDescription: repostForm.newDescription || null,
+          newPrice: repostForm.newPrice ? parseFloat(repostForm.newPrice) : null,
+          photoOrder: null,
+          deleteAfter: !isVendu
+        }
+      })
 
       const res = await fetch('/api/dressing/repost', {
         method: 'POST',
@@ -526,7 +535,7 @@ export default function DressingPage() {
           </div>
           
           <div className="flex items-center justify-between gap-4">
-            {activeTab === 'ACTIF' && filteredItems.length > 0 ? (
+            {(activeTab === 'ACTIF' || activeTab === 'VENDU') && filteredItems.length > 0 ? (
               <button
                 onClick={toggleSelectAll}
                 className="text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1.5"
@@ -615,8 +624,8 @@ export default function DressingPage() {
                     <div className="absolute inset-0 bg-emerald-500/20 border-2 border-emerald-500/50 z-0" />
                   )}
 
-                  {/* Selection checkbox (onglet En ligne) */}
-                  {activeTab === 'ACTIF' && (
+                  {/* Selection checkbox (onglets En ligne + Vendu) */}
+                  {(activeTab === 'ACTIF' || activeTab === 'VENDU') && (
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
                       className={cn(
@@ -645,7 +654,7 @@ export default function DressingPage() {
 
                   {/* Hover Buttons */}
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-center gap-2 p-4 z-10">
-                    {activeTab === 'ACTIF' ? (
+                    {(activeTab === 'ACTIF' || activeTab === 'VENDU') ? (
                       <>
                         <button
                           onClick={(e) => { e.stopPropagation(); setSelectedItems(new Set([item.id])); setShowRepostModal(true); }}
@@ -666,12 +675,14 @@ export default function DressingPage() {
                         >
                           Dupliquer
                         </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleAction(item, 'DELETE_ITEM'); }}
-                          className="w-full py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-lg transition-colors"
-                        >
-                          Supprimer
-                        </button>
+                        {activeTab === 'ACTIF' && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleAction(item, 'DELETE_ITEM'); }}
+                            className="w-full py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-lg transition-colors"
+                          >
+                            Supprimer
+                          </button>
+                        )}
                       </>
                     ) : (
                       <button

@@ -201,8 +201,22 @@ async function repostItemInPage(tabId, itemId, options = {}) {
         console.warn("[REPOST] Fallback /items/ (item_upload a échoué)");
         itemRes = await vintedFetch(`/api/v2/items/${itemId}`);
     }
-    if (!itemRes.success) throw new Error(`Lecture article HTTP ${itemRes.status}`);
-    const original = itemRes.data.item || itemRes.data;
+    let original;
+    if (itemRes.success) {
+        original = itemRes.data.item || itemRes.data;
+    } else {
+        // Article introuvable sur Vinted : cas d'un VENDU (Vinted supprime l'article de son API).
+        // On rejoue le snapshot sauvegardé pendant qu'il était actif (cf. snapshotActiveItems).
+        const snapKey = "vb_snapshot_" + itemId;
+        const snapStore = await chrome.storage.local.get(snapKey);
+        const snap = snapStore && snapStore[snapKey];
+        if (snap && snap.item) {
+            original = snap.item;
+            console.log(`📸 [REPOST] Article retiré de Vinted (vendu) → utilisation du snapshot sauvegardé.`);
+        } else {
+            throw new Error(`Article introuvable sur Vinted (vendu/retiré) et aucun snapshot disponible. Le repost d'un vendu n'est possible que s'il a été vu actif après l'activation de la sauvegarde.`);
+        }
+    }
     if (!original) throw new Error("Format article inconnu lors de la lecture");
     console.log(`🔄 [REPOST] Article lu : "${original.title}"`);
 
@@ -2894,8 +2908,63 @@ async function syncVintedItemMetricsToManager() {
         console.log(`✅ [SYNC METRICS] ${metricsRes.data?.processed || 0} articles, ${metricsRes.data?.winnersDetected || 0} Winners !`);
         saveLog(`✅ ${metricsRes.data?.processed || 0} articles synchro`);
 
+        // 📸 Sauvegarde des articles ACTIFS (snapshot) pour pouvoir les reposter APRES vente.
+        // Vinted supprime un article vendu de son API → sans snapshot, le repost d'un vendu est impossible.
+        try { await snapshotActiveItems(tabId, mappedItems); } catch (e) { console.warn("📸 [SNAPSHOT] échec:", e.message); }
+
     } catch (err) {
         console.error("❌ [SYNC METRICS] Échec :", err.message);
+    }
+}
+
+/**
+ * 📸 Sauvegarde locale (chrome.storage.local) des données complètes des articles ACTIFS,
+ * pour permettre leur repost APRÈS vente (Vinted retire les articles vendus de son API).
+ * Source : /api/v2/item_upload/items/{id} (mêmes données que celles lues par le repost).
+ * Rate-limité : seuls les articles pas encore sauvegardés, plafonnés par cycle, avec délais.
+ */
+async function snapshotActiveItems(tabId, mappedItems) {
+    const MAX_PER_CYCLE = 8;
+    const INACTIVE = ["vendu", "sold", "venduto", "verkocht", "masqué", "masque", "hidden", "brouillon", "draft", "supprimé", "supprime", "deleted", "réservé", "reserve", "reserved"];
+    const actives = (mappedItems || [])
+        .filter(it => it && it.id != null && !INACTIVE.includes(String(it.status || "").toLowerCase()))
+        .map(it => String(it.id));
+    if (!actives.length) return;
+
+    const store = await chrome.storage.local.get(null);
+    const missing = actives.filter(id => !store["vb_snapshot_" + id]).slice(0, MAX_PER_CYCLE);
+    if (!missing.length) return;
+
+    console.log(`📸 [SNAPSHOT] ${missing.length} article(s) actif(s) à sauvegarder...`);
+    const inj = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async (ids) => {
+            const out = {};
+            const headers = { Accept: "application/json" };
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta && meta.content) headers["X-CSRF-Token"] = meta.content;
+            for (const id of ids) {
+                try {
+                    const r = await fetch(`/api/v2/item_upload/items/${id}`, { credentials: "include", headers });
+                    if (r.ok) { const j = await r.json(); out[id] = j.item || j; }
+                } catch (e) {}
+                await new Promise(res => setTimeout(res, 800 + Math.random() * 700)); // délai humain
+            }
+            return out;
+        },
+        args: [missing]
+    });
+
+    const snaps = (inj && inj[0] && inj[0].result) || {};
+    const toStore = {};
+    let n = 0;
+    for (const id of Object.keys(snaps)) {
+        if (snaps[id] && (snaps[id].photos || []).length) { toStore["vb_snapshot_" + id] = { savedAt: Date.now(), item: snaps[id] }; n++; }
+    }
+    if (n) {
+        await chrome.storage.local.set(toStore);
+        console.log(`📸 [SNAPSHOT] ${n} snapshot(s) stocké(s) localement.`);
+        saveLog(`📸 ${n} article(s) sauvegardé(s) (repost après vente)`);
     }
 }
 
