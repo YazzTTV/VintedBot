@@ -1,0 +1,30 @@
+{
+  "_comment": "Override prix par robe. Valeur = null (prix auto 40-80 euros) | un nombre (prix fixe, ex 120) | [min,max] (fourchette custom, ex [80,150]). Ouvre le dossier Winner trie par nom pour identifier chaque robe.",
+  "_exemple": {
+    "Capture ... 14.01.58.png": "-> mets 130 pour prix fixe, ou [90,160] pour fourchette"
+  },
+  "Capture d’écran 2026-06-21 à 14.01.58.png": null,
+  "Capture d’écran 2026-06-21 à 14.02.24.png": null,
+  "Capture d’écran 2026-06-21 à 14.03.01.png": null,
+  "Capture d’écran 2026-06-21 à 14.03.14.png": null,
+  "Capture d’écran 2026-06-21 à 14.03.30.png": null,
+  "Capture d’écran 2026-06-21 à 14.03.45.png": null,
+  "Capture d’écran 2026-06-21 à 14.04.00.png": null,
+  "Capture d’écran 2026-06-21 à 14.04.16.png": null,
+  "Capture d’écran 2026-06-21 à 14.04.34.png": null,
+  "Capture d’écran 2026-06-21 à 14.04.46.png": null,
+  "Capture d’écran 2026-06-21 à 14.05.04.png": null,
+  "Capture d’écran 2026-06-21 à 14.05.18.png": null,
+  "Capture d’écran 2026-06-21 à 14.05.30.png": null,
+  "Capture d’écran 2026-06-21 à 14.07.18.png": null,
+  "Capture d’écran 2026-06-21 à 14.07.33.png": null,
+  "Capture d’écran 2026-06-21 à 14.07.46.png": null,
+  "Capture d’écran 2026-06-21 à 14.07.58.png": null,
+  "Capture d’écran 2026-06-21 à 14.08.10.png": null,
+  "Capture d’écran 2026-06-21 à 14.08.22.png": null,
+  "Capture d’écran 2026-06-21 à 14.08.38.png": null,
+  "Capture d’écran 2026-06-21 à 14.09.13.png": null,
+  "Capture d’écran 2026-06-21 à 14.09.24.png": null,
+  "Capture d’écran 2026-06-21 à 14.09.40.png": null,
+  "Capture d’écran 2026-06-21 à 14.09.56.png": null
+}

@@ -308,6 +308,133 @@ def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr", n
         return None
 
 
+# Fourchettes de prix par type (faciles à ajuster). (min, max) en euros.
+WINNER_PRICE_RANGE = (40, 80)   # vrais articles (robes/vêtements tendance)
+FAKE_PRICE_RANGE = (30, 70)     # fakes : volontairement assez élevés (pas destinés à se vendre)
+
+
+def suggest_price(kind: str, title: str, description: str = "", language: str = "fr",
+                  sold_count: int = 0, price_range: tuple | None = None) -> int:
+    """
+    Demande à Gemini un prix de vente (entier €) adapté à l'article.
+    - kind="WINNER" : prix optimal marge/vitesse dans la fourchette, monte avec sold_count.
+    - kind="FAKE"   : prix volontairement élevé/crédible (l'objet n'a pas vocation à se vendre).
+    sold_count : nb de ventes passées (0 tant que la couche ventes n'est pas branchée).
+    Robuste : clamp dans la fourchette, fallback = milieu de fourchette si l'appel échoue.
+    """
+    import os
+    import re as _re
+    from google import genai
+    from dotenv import load_dotenv
+
+    lo, hi = price_range or (WINNER_PRICE_RANGE if kind == "WINNER" else FAKE_PRICE_RANGE)
+    fallback = round((lo + hi) / 2)
+
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return fallback
+
+    if kind == "WINNER":
+        instr = (
+            f"Tu es expert en pricing de seconde main sur Vinted (mode femme tendance). "
+            f"Article : \"{title}\". {description}\n"
+            f"Propose le PRIX DE VENTE optimal en euros, ENTRE {lo} ET {hi}, qui maximise la marge "
+            f"tout en se vendant vite. Cet article s'est déjà vendu {sold_count} fois : plus ce nombre "
+            f"est élevé, plus la demande est forte, donc plus tu peux viser le haut de la fourchette."
+        )
+    else:
+        instr = (
+            f"Tu es vendeur sur Vinted. Objet d'occasion divers : \"{title}\". {description}\n"
+            f"Propose un prix en euros ENTRE {lo} ET {hi}. L'objet est présenté comme original/vintage "
+            f"et n'a pas vocation à se vendre vite : vise plutôt le haut de la fourchette tout en restant crédible."
+        )
+    prompt = instr + "\nRéponds UNIQUEMENT par un nombre entier (euros), sans symbole ni texte."
+
+    try:
+        client = genai.Client(api_key=api_key)
+        resp = client.models.generate_content(model='gemini-3.1-flash-lite', contents=[prompt])
+        m = _re.search(r'\d+', (resp.text or ""))
+        if not m:
+            return fallback
+        price = int(m.group(0))
+        price = max(lo, min(hi, price))  # clamp dans la fourchette
+        print(f"[Processor] Prix suggéré ({kind}, ventes={sold_count}) : {price}€")
+        return price
+    except Exception as e:
+        print(f"[Processor] [WARN] suggest_price échec ({e}) -> fallback {fallback}€")
+        return fallback
+
+
+def analyze_fake_item(image_path: str, size: str = "S", language: str = "fr") -> dict | None:
+    """
+    Analyse GÉNÉRIQUE pour les fausses annonces (banque d'image) : l'article peut être
+    de N'IMPORTE QUELLE catégorie (vêtement, déco, maison, vaisselle, papeterie, accessoire...).
+    Contrairement à analyze_screenshot (spécifique vêtement), ce prompt ne refuse jamais.
+    Retourne {titre_vinted, description_vinted} (pas de prompt image : on garde les vraies photos).
+    """
+    import os
+    from google import genai
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        print("[Processor] ERREUR : GEMINI_API_KEY introuvable dans .env")
+        return None
+
+    # Persona / langue (compact, indépendant du système de niches vêtement)
+    if language.lower() == "nl":
+        persona = "Je bent een gewone, sympathieke verkoper op Vinted (markt NL/BE)."
+        consigne = "Schrijf titel en beschrijving UITSLUITEND in vloeiend, natuurlijk Nederlands."
+    elif language.lower() == "fr":
+        persona = "Tu es un vendeur régulier et très humain sur Vinted."
+        consigne = "Rédige le titre et la description EXCLUSIVEMENT en français."
+    else:
+        persona = f"Tu es un vendeur régulier sur Vinted (marché '{language}')."
+        consigne = f"Rédige le titre et la description EXCLUSIVEMENT dans la langue '{language}'."
+
+    print(f"[Processor] Analyse FAKE (générique) : {image_path} (Langue : {language.upper()})...")
+
+    final_prompt = (
+        f"{persona}\n"
+        "Tu dois rédiger une annonce de seconde main pour l'OBJET visible sur la photo.\n"
+        "⚠️ IMPORTANT : l'objet peut être de N'IMPORTE QUELLE catégorie (vêtement, accessoire, "
+        "décoration, maison, vaisselle, papeterie, jouet, électronique, etc.). "
+        "Tu ne refuses JAMAIS, quel que soit l'objet. Tu décris simplement ce que tu vois.\n"
+        f"{consigne}\n"
+        "Reste honnête et concis (état correct, occasion). N'invente pas de marque.\n\n"
+        "Réponds UNIQUEMENT avec CE format exact, sans aucune autre phrase :\n"
+        "[TITRE_VINTED]titre court et accrocheur (max ~60 caractères)[/TITRE_VINTED]\n"
+        "[DESCRIPTION_VINTED]description naturelle de 2 à 4 phrases[/DESCRIPTION_VINTED]"
+    )
+
+    try:
+        from PIL import Image
+        img = Image.open(image_path)
+    except Exception as e:
+        print(f"[Processor] ERREUR lecture image locale : {e}")
+        return None
+
+    try:
+        client = genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model='gemini-3.1-flash-lite',
+            contents=[final_prompt, img],
+        )
+        raw_text = response.text
+        if not raw_text:
+            print("[Processor] ERREUR : reponse vide de l'API.")
+            return None
+        result = _parse_gemini_response(raw_text)
+        if result:
+            print(f"[Processor] Analyse FAKE reussie : '{result.get('titre_vinted', '?')}'")
+        return result
+    except Exception as e:
+        print(f"[Processor] Erreur critique API Gemini (fake) : {e}")
+        return None
+
+
 if __name__ == "__main__":
     # Test rapide : python processor.py
     import sys

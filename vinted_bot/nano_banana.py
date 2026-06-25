@@ -244,6 +244,17 @@ DOG_BACKGROUNDS = [
     "dans une piece de vie scandinave lumineuse",
 ]
 
+# Variations LEGERES de la main/bras LIBRE (celle qui ne tient pas le telephone),
+# tirees au hasard pour que la 1ere image (selfie) ne soit pas toujours identique.
+HAND_VARIATIONS = [
+    "laisse le bras libre detendu le long du corps",
+    "pose legerement la main libre sur la hanche",
+    "passe doucement la main libre dans les cheveux",
+    "laisse la main libre effleurer le bas de la robe",
+    "replie un peu le bras libre, main pres de la taille",
+    "laisse la main libre reposer naturellement sur la cuisse",
+]
+
 
 def _is_mannequin(account_dir: str) -> bool:
     """Detecte si le compte utilise un buste de couture (settings prompt_style == 'mannequin')."""
@@ -268,11 +279,15 @@ def build_selfie_prompt(prompt_anglais: str) -> str:
     Le cadrage plein pied rend toute la piece visible et evite le bas coupe / le
     pantalon d'origine qui depassait.
     """
+    import random
+    hand = random.choice(HAND_VARIATIONS)
     return (
         f"Mets la robe de l'image 2 a la fille de l'image 1 ({prompt_anglais}). "
-        "Garde l'image 1 telle quelle : exactement le meme decor, la meme piece, la meme pose, "
-        "le meme visage cache par le telephone, les memes cheveux, le meme cadrage et le meme "
-        "eclairage. Ne change que la tenue. "
+        "Garde l'image 1 quasiment telle quelle : exactement le meme decor, la meme piece, "
+        "le meme visage cache par le telephone, les memes cheveux, le meme cadrage et le meme eclairage. "
+        f"Tu peux LEGEREMENT varier UNIQUEMENT la position du bras/de la main libre (celle qui ne tient "
+        f"pas le telephone) : {hand}. Ne change rien d'autre a la pose. "
+        "Ne change que la tenue et cette main libre. "
         "La robe doit etre identique a celle de l'image 2 : meme couleur, meme col, memes manches, "
         "meme taille, memes volants, meme longueur et meme coupe. Ne la redessine pas. "
         "La fille ne porte que cette robe : sous l'ourlet, ses jambes sont nues, aucun pantalon, "

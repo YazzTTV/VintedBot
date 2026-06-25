@@ -62,3 +62,8 @@ Thumbs.db
 # --- Prisma local ---
 /prisma/*.db
 /prisma/*.db-journal
+
+# Sorties de la routine de publication en salves (images IA generees par compte)
+/vinted_bot/_salve_out/
+# Etat runtime de la routine (mute a chaque execution -> conflits si versionne)
+/vinted_bot/routine_state.json

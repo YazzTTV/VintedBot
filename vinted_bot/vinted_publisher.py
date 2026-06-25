@@ -139,6 +139,19 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
                 
             print(f"[Publisher] Onglet maitre trouve pour {account_name}. Utilisation directe de cet onglet pour conserver le profil...")
             page = master_page
+
+            # Forcer un viewport DESKTOP (1440x900) INDÉPENDAMMENT de la taille réelle de
+            # l'écran/fenêtre. Sur petit écran, Vinted passe en layout étroit : le champ Marque
+            # se masque et le sélecteur de Catégorie devient un plein-écran qui reste ouvert et
+            # bloque le clic sur "Publier". On émule un grand viewport via CDP (marche même si
+            # l'écran physique est petit -> indispensable pour le cron, peu importe qui est connecté).
+            try:
+                _cdp = page.context.new_cdp_session(page)
+                _cdp.send("Emulation.setDeviceMetricsOverride",
+                          {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False})
+                print("[Publisher] Viewport desktop force (1440x900).")
+            except Exception as _e:
+                print(f"[Publisher] [WARN] Override viewport impossible : {_e}")
             
             # On navigue vers la page d'upload normale sans paramètre pour éviter que Vinted nous redirige
             # (Le paramètre sera remis à la fin du script ou en cas d'erreur)
@@ -265,7 +278,17 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
                 print(f"[Publisher] [WARN] Erreur couleur : {color_err}")
             
             # --- ÉTAPE 4 : Prix ---
-            price = "55"  # Prix par défaut pour le MVP
+            # Prix dynamique : lu depuis price.txt (généré par suggest_price) ; fallback 55€.
+            price = "55"
+            price_file = os.path.join(product_dir, "price.txt")
+            if os.path.exists(price_file):
+                try:
+                    with open(price_file, "r", encoding="utf-8") as pf:
+                        val = pf.read().strip()
+                    if val:
+                        price = val
+                except Exception:
+                    pass
             print(f"[Publisher] Remplissage du Prix : {price}€")
             price_input = page.locator('input[name="price"], input[id="price"], [placeholder="0,00"]').first
             if price_input.is_visible():
@@ -381,13 +404,31 @@ def publish_listing(account_name: str, product_dir: str, auto_submit: bool = Fal
             # Optionnel : Clic de validation finale
             if auto_submit:
                 print("[Publisher] Soumission automatique de l'annonce...")
-                submit_btn = page.locator('button[type="submit"], button:has-text("Ajouter"), button:has-text("Toevoegen")').first
+                submit_btn = page.locator('button[type="submit"], button:has-text("Ajouter"), button:has-text("Toevoegen"), button[data-testid="upload-form-save-button"]').first
                 if submit_btn.is_visible():
                     submit_btn.click()
-                    time.sleep(3)
-                    print("[Publisher] Annonce ajoutée avec succès !")
+                    # VÉRIFICATION RÉELLE : succès = on quitte /items/new (redirection vers l'article/closet).
+                    # Échec (champ obligatoire manquant, etc.) = on reste sur le formulaire.
+                    published = False
+                    try:
+                        page.wait_for_url(lambda u: "/items/new" not in u, timeout=15000)
+                        published = True
+                    except Exception:
+                        published = False
+                    if published:
+                        print("[Publisher] Annonce publiée (redirection confirmée).")
+                    else:
+                        errs = []
+                        try:
+                            raw = page.locator('[class*="error" i], [role="alert"], [aria-invalid="true"]').all_text_contents()
+                            errs = [e.strip() for e in raw if e.strip()][:6]
+                        except Exception:
+                            pass
+                        print(f"[Publisher] [ECHEC] Annonce NON publiée (toujours sur le formulaire). Champs/erreurs : {errs}")
+                        return False
                 else:
                     print("[Publisher] [WARN] Bouton de publication introuvable.")
+                    return False
             elif save_draft:
                 print("[Publisher] Sauvegarde en brouillon...")
                 draft_btn = page.locator('button:has-text("Sauvegarder le brouillon"), button:has-text("Opslaan als concept")').first
