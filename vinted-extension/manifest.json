@@ -32,7 +32,9 @@
     "*://*.shein.fr/*",
     "https://vinted-manager-flame.vercel.app/*",
     "http://localhost:3000/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://svc-shipping-labels.s3.eu-central-1.amazonaws.com/*",
+    "https://*.amazonaws.com/*"
   ],
   "background": {
     "service_worker": "background.js"
