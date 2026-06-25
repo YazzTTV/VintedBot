@@ -117,6 +117,10 @@ model BotAccount {
   metrics          VintedItemMetrics[]
   orders           VintedOrderSynced[]
   winnerQueue      WinnerQueue[]
+  fakeListings     FakeListing[]
+  rotationLock     RotationLock?
+  rotationConfig   RotationConfig?
+  rotationEvents   RotationEvent[]
 }
 
 model VintedOrderSynced {
@@ -161,6 +165,8 @@ model VintedMessage {
   conversationId  String
   senderUsername  String
   content         String
+  type            String             @default("message") // "message" | "offer" | "status"
+  offerPrice      Decimal?           @db.Decimal(10, 2)
   createdAtVinted DateTime
   conversation    VintedConversation @relation(fields: [conversationId], references: [id])
 }
@@ -238,17 +244,106 @@ model ParcelEvent {
   parcel      ParcelTracking @relation(fields: [parcelId], references: [id], onDelete: Cascade)
 }
 
+// Entrée de rotation d'un winner POUR UN COMPTE donné.
+// Un même winner sous-jacent (même sourceKey) peut exister sur plusieurs comptes,
+// mais jamais deux fois sur le même compte (@@unique). Cycle de vie : QUEUED -> ACTIVE -> (RETIRED).
 model WinnerQueue {
-  id               String       @id @default(uuid())
-  botAccountId     String
-  title            String
-  sourcingUrl      String?
-  originalPhotoUrl String?
-  lastPublishedAt  DateTime?
-  status           QueueStatus  @default(QUEUED)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-  botAccount       BotAccount   @relation(fields: [botAccountId], references: [id])
+  id                String      @id @default(uuid())
+  botAccountId      String
+  // Identifiant stable du winner sous-jacent (ex: nom de la capture Winner / id sourcing).
+  // Partagé entre comptes ; null toléré pour les anciennes lignes.
+  sourceKey         String?
+  title             String
+  sourcingUrl       String?
+  originalPhotoUrl  String?
+  season            String? // tag saisonnier optionnel (tri auto)
+  status            QueueStatus @default(QUEUED)
+  // Ordre FIFO recirculant : un invendu swappé à 7j repart en fond de file (max+1).
+  queuePosition     Int?
+  // Item Vinted live courant (change à chaque repost). Réf. souple vers VintedItemMetrics.id.
+  vintedItemId      String?
+  publishedAt       DateTime? // 1re mise en ligne du cycle courant (réf. d'âge)
+  lastPublishedAt   DateTime? // legacy (conservé, non destructif)
+  lastRepostAt      DateTime? // dernier repost (réf. d'âge = max(publishedAt, lastRepostAt))
+  unsoldRepostCount Int         @default(0) // compteur N (remis à 0 sur vente)
+  soldCount         Int         @default(0) // nb de ventes pour ce compte (preuve de winner)
+  retiredAt         DateTime?
+  retiredReason     String?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  botAccount        BotAccount  @relation(fields: [botAccountId], references: [id])
+
+  @@unique([botAccountId, sourceKey])
+  @@index([botAccountId, status])
+}
+
+// Pool global de fausses annonces (banque d'image), SINGLE-USE GLOBAL :
+// une fois assignée à un compte, jamais réutilisée par un autre (clé sourceFolder).
+model FakeListing {
+  id                String      @id @default(uuid())
+  sourceFolder      String      @unique // dossier Produit_XX du Bureau (garantit l'unicité globale)
+  photoCount        Int         @default(0)
+  status            FakeStatus  @default(AVAILABLE)
+  assignedAccountId String?
+  language          String? // fr/nl, fixé à l'assignation (génération titre/desc paresseuse)
+  title             String?
+  description       String?
+  vintedItemId      String?
+  publishedAt       DateTime?
+  lastRepostAt      DateTime?
+  unsoldRepostCount Int         @default(0)
+  assignedAt        DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  assignedAccount   BotAccount? @relation(fields: [assignedAccountId], references: [id])
+
+  @@index([status])
+  @@index([assignedAccountId, status])
+}
+
+// VERROU par compte (le « cerveau » passif impose l'exclusion via TTL).
+// Tant qu'un verrou non expiré existe, /api/extension/actions retient les REPOST_ITEM du compte
+// -> évite la collision Playwright (publication) <-> extension (repost) sur le même onglet Brave.
+model RotationLock {
+  botAccountId String     @id
+  holder       String // ex: "PYTHON_SALVE" | "MANUAL" | "CRON"
+  reason       String? // ex: "PUBLISH"
+  acquiredAt   DateTime   @default(now())
+  expiresAt    DateTime // TTL : auto-libération si le détenteur crashe
+  botAccount   BotAccount @relation(fields: [botAccountId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+}
+
+// Paramètres de rotation par compte (valeurs par défaut = décisions validées).
+model RotationConfig {
+  botAccountId      String     @id
+  enabled           Boolean    @default(false) // rollout progressif / dry-run par compte
+  targetWinnerSlots Int        @default(35)
+  targetFakeSlots   Int        @default(35)
+  maxUnsoldReposts  Int        @default(3) // N avant retraite
+  repostAgeDays     Int        @default(7)
+  dailyWinnerCount  Int        @default(5)
+  dailyFakeCount    Int        @default(5)
+  updatedAt         DateTime   @updatedAt
+  botAccount        BotAccount @relation(fields: [botAccountId], references: [id], onDelete: Cascade)
+}
+
+// Journal des décisions de l'ordonnanceur. dryRun=true => calculé mais non exécuté (test Phase 1).
+model RotationEvent {
+  id           String     @id @default(uuid())
+  botAccountId String
+  kind         String // "WINNER" | "FAKE"
+  refId        String? // WinnerQueue.id ou FakeListing.id
+  vintedItemId String?
+  // PUBLISH_FRESH | REPOST_SOLD | REPOST_MASKED | REPOST_EXPIRED | SWAP_OUT | RETIRE | FILL_SLOT | SKIP
+  decision     String
+  reason       String?
+  dryRun       Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  botAccount   BotAccount @relation(fields: [botAccountId], references: [id])
+
+  @@index([botAccountId, createdAt])
 }
 
 model ExtensionLog {
@@ -382,6 +477,15 @@ enum AccountType {
 }
 
 enum QueueStatus {
-  QUEUED
-  ACTIVE
+  QUEUED // en file d'attente (recirculante)
+  ACTIVE // en ligne (occupe un des 35 slots)
+  RETIRED // sorti du pool (N reposts sans vente / hors saison)
+}
+
+enum FakeStatus {
+  AVAILABLE // dispo dans la banque, non assignée
+  ASSIGNED // assignée à un compte, pas encore publiée
+  LIVE // en ligne
+  SOLD // vendue
+  RETIRED // sortie de rotation
 }

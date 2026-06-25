@@ -59,10 +59,19 @@ export async function GET(request: Request) {
       orderBy: { createdAt: 'asc' }
     })
 
+    // 🔒 Verrou de rotation : si un verrou non expiré existe pour ce compte (le salve
+    // Python publie sur le même onglet Brave), on RETIENT les actions de création
+    // d'annonce (REPOST_ITEM / DUPLICATE_ITEM) pour éviter la collision Playwright<->extension.
+    // Elles restent PENDING et repartiront au cycle suivant, une fois le verrou levé/expiré.
+    const lock = await prisma.rotationLock.findUnique({ where: { botAccountId: account.id } })
+    const locked = !!lock && lock.expiresAt > new Date()
+    const WITHHELD_WHILE_LOCKED = ['REPOST_ITEM', 'DUPLICATE_ITEM']
+
     // Anti-rate-limit Vinted (code 106 sur les écritures en rafale) : au plus 1 GENERATE_LABEL
     // par cycle de poll. Les autres restent PENDING pour les cycles suivants → génération étalée.
     let labelTaken = false
     const actions = allActions.filter(a => {
+      if (locked && WITHHELD_WHILE_LOCKED.includes(a.actionType)) return false
       if (a.actionType === 'GENERATE_LABEL') {
         if (labelTaken) return false
         labelTaken = true

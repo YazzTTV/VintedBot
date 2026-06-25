@@ -271,7 +271,9 @@ export async function POST(request: Request) {
             await prisma.vintedMessage.update({
               where: { id: existingMsg.id },
               data: {
-                createdAtVinted: new Date(msg.createdAtVinted)
+                createdAtVinted: new Date(msg.createdAtVinted),
+                type: msg.type || 'message',
+                offerPrice: msg.offerPrice != null ? Number(msg.offerPrice) : null
               }
             });
             continue;
@@ -293,6 +295,8 @@ export async function POST(request: Request) {
               conversationId: id,
               senderUsername: msg.senderUsername,
               content: msg.content,
+              type: msg.type || 'message',
+              offerPrice: msg.offerPrice != null ? Number(msg.offerPrice) : null,
               createdAtVinted: new Date(msg.createdAtVinted)
             }
           })
