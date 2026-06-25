@@ -301,7 +301,7 @@ background.js:1994  ❤️ [API SCAN] NOUVEAU like API de <user> sur item #<id> 
 
 ---
 
-## 16. Session 2026-06-25 — Offres dans la messagerie (faire / accepter / contre-offrir / refuser) ✅ codé, ⚠️ non testé en réel
+## 16. Session 2026-06-25 — Offres dans la messagerie (faire / accepter / contre-offrir / refuser) ✅ codé + déployé, envoi d'offre validé en réel
 
 **Objectif** : depuis les discussions du Manager, pouvoir **proposer un prix, accepter une offre, faire une contre-offre et refuser** — comme Vinteo.
 
@@ -331,8 +331,15 @@ Toutes ces écritures partent en **`world:"MAIN"`** (cf §6.1) via `executeBotAc
 ### ✅ Vérifs faites
 - `node --check background.js` OK · `tsc --noEmit` sans erreur sur `inbox/page.tsx`.
 
-### ⚠️ À FAIRE / valider
-1. **Recharger l'extension** (`chrome://extensions` → ↻) + **déployer le Manager** (`vercel --prod --yes` depuis `vinted-manager/`, `git fetch` d'abord cf §10/§12).
-2. **Tester** : Contre-offre et « Proposer un prix » testables tout de suite ; **Accepter/Refuser nécessitent une vraie offre acheteur en attente**. Vérifier que `BotActionQueue` passe en `SUCCESS`.
-3. Anti-bot (§6.6) : ce sont des **écritures** → espacer les actions. Prix **≥ 1 €** (sinon `validation_error`).
-4. Pas encore commité/poussé (repo partagé, CRLF/LF cf §12 → stager fichier par fichier).
+### ✅ Déploiement & commits (fin de session)
+- **5 commits poussés sur `origin/main`** : offres (`7367644`) + backlog des sessions précédentes qui n'avait jamais été commité (routine salves `vinted_bot`, rotation/push VAPID Manager, host_permissions S3 extension, comptes). ⚠️ **Découverte** : `origin/main` était figé au §12 (≈17/06) — tout §13/§15 + le travail multi-fichiers était local non commité. Désormais local == origin (0/0).
+- **Base prod migrée** : nouveaux modèles `RotationLock`/`RotationConfig`/`RotationEvent`/`FakeListing` + contrainte `@@unique([botAccountId, sourceKey])` sur `WinnerQueue`. Le build (`prisma db push`) refusait la contrainte (data-loss) → migration appliquée **manuellement** par l'utilisateur (`npx prisma db push` depuis `vinted-manager/`, OK sans `--accept-data-loss`, aucun doublon). Build command **laissé inchangé** (garde-fou anti-data-loss conservé).
+- **Manager déployé** en prod (`vercel --prod --yes`, build OK 44s, alias `vinted-manager-flame.vercel.app` → READY) + **extension rechargée**.
+
+### 🧪 Résultats des tests (2026-06-25)
+- ✅ **Envoi d'offre validé en réel** sur **yazz** : bouton « Proposer un prix » → action `COUNTER_OFFER` → `✅ [EXECUTE] Succès`, offre partie. Chaîne complète OK (Manager → `BotActionQueue` → poll extension → `world:"MAIN"` → endpoint Vinted). Note : « Proposer un prix » et « Contre-offre » partagent le **même type d'action `COUNTER_OFFER`**.
+- ⏳ **Accepter / Refuser** : pas encore validés (aucune offre acheteur en attente côté vendeur au moment du test ; le seul banner détecté venait d'une conv où yazz était acheteur, article déjà vendu). Même mécanique + détection élargie (`findPendingOfferRequestId`) → à confirmer sur une vraie offre reçue.
+
+### ⚠️ À garder en tête
+- Anti-bot (§6.6) : ce sont des **écritures** → espacer les actions. Prix **≥ 1 €** (sinon `validation_error`).
+- Backlog non-offres commité « en l'état » (3 fichiers entiers + groupes thématiques) : peut contenir du travail antérieur d'autres sessions mélangé.
