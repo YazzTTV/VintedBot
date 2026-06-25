@@ -1,6 +1,6 @@
 # Vinted Manager — Contexte projet (à lire en priorité)
 
-> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-17.
+> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-20.
 > Répondre **toujours en français** (préférence utilisateur).
 >
 > **⚠️ Repo partagé avec un autre dev.** GitHub `https://github.com/YazzTTV/VintedBot` (branche `main`).
@@ -199,3 +199,140 @@ Le local et GitHub avaient **deux implémentations différentes** de la détecti
 - **Repo en CRLF** localement alors que le dépôt est en LF (`core.autocrlf=true`). Conséquence : `git status` montre ~26 fichiers « modifiés » qui ne le sont pas vraiment. Toujours vérifier le diff réel avec `git -c core.autocrlf=false diff` et **stager fichier par fichier** ses vraies modifs. `git add` normalise en LF (commits propres).
 - Lecture des secrets / écriture en base prod / `vercel env add` sont **bloqués automatiquement** : ces actions doivent être faites **par l'utilisateur** (commande `! …` ou dashboard Vercel).
 - ⚠️ Le fichier `~/Desktop/bugextension.txt` a contenu des **cookies de session + tokens Vinted** (capture réseau) — à vider, et idéalement se reconnecter à Vinted pour invalider ces tokens.
+
+---
+
+## 13. Session 2026-06-20 — Messagerie (réponse depuis le Manager) ✅
+
+### ✅ Répondre à une conversation depuis le Manager — VALIDÉ
+- **Flux** : inbox `/inbox` → `pushAction("SEND_MESSAGE", {conversationId, message})` → `POST /api/extension/actions` (crée une `BotActionQueue` PENDING pour le compte) → `pollActionQueueFromManager` → `executeBotAction` en `world:"MAIN"` → `POST /api/v2/conversations/{id}/replies`.
+- Le `conversationId` stocké côté Manager (`VintedConversation.id`) est bien **l'id Vinted réel** (`String(thread.id)`), donc l'URL `/replies` est correcte.
+- Body envoyé : `{ reply: { body, photo_temp_uuids: null, is_personal_data_sharing_check_skipped: false } }` (`background.js` action `SEND_MESSAGE`). **Fonctionne tel quel** (le `null` passe ; Vinteo envoie `[]` mais pas nécessaire).
+- **Testé OK** : 3 envois `SEND_MESSAGE` → tous SUCCESS dans les logs (compte yazz_tw), puis confirmé **sur plusieurs comptes**.
+
+### 🔑 Référence Vinteo (comment ils envoient un message)
+- Même endpoint `POST /api/v2/conversations/{id}/replies`. Différence notable : sur **403**, Vinteo **relit le CSRF token frais dans le DOM et réessaie une fois** (`content/vinteo-fetch-main.js` + `vinted-api.js`). Les écritures (non‑GET) partent toujours en **MAIN world same‑origin**, jamais du SW. À garder en tête si des 403 réapparaissent sur l'envoi.
+
+### ⚠️ Limite multi‑comptes (aiguillage des actions)
+- `pollActionQueueFromManager` prend **un seul onglet** via `getOptimalVintedTab()`, lit le compte connecté dedans et ne récupère **que les actions de ce compte** (`?botAccountName=...&vintedAccountId=...`).
+- Donc chaque compte doit tourner dans **son propre profil Brave** (instance d'extension dédiée + onglet Vinted connecté) pour que ses actions soient exécutées. Si plusieurs comptes sont de simples onglets d'un même navigateur, seul le compte de l'onglet « optimal » est servi → les actions des autres restent PENDING indéfiniment. (Validé OK car comptes en profils séparés.)
+
+### 🟠 Auto‑bordereau — nouveau blocage (CORS, plus le 403)
+- Le 403 anti‑bot du PUT `/shipment/order` ne se déclenche plus : on obtient bien l'URL S3 du PDF.
+- Nouveau point bloquant : `GENERATE_LABEL` échoue sur le **téléchargement du PDF** : `fetch(labelUrl)` tourne dans le **service worker** (origine `chrome-extension://`) → S3 (`svc-shipping-labels.s3.eu-central-1.amazonaws.com`) **bloqué par CORS** (`No 'Access-Control-Allow-Origin'`) → `Failed to fetch` (logs 37‑38, 112‑113).
+- **Piste** : Vinteo a un fichier `rules_label_bucket.json` (règle `declarativeNetRequest`) qui sert probablement exactement à débloquer ce bucket de bordereaux. À explorer quand on reprendra le bordereau.
+- **TODO** : reprendre l'auto‑bordereau **à la prochaine vente réelle** (besoin d'une vente fraîche pour générer + tester le flux de bout en bout).
+
+---
+
+## 14. Annexe — Logs extension (session 2026-06-20, extraits de `bugextension.txt`)
+
+Logs conservés pour référence (notamment pour débloquer l'auto‑bordereau à la prochaine vente). Compte testé : **yazz_tw (69059956)**. Accents nettoyés.
+
+### ✅ Messagerie — `SEND_MESSAGE` envoyés avec succès
+```
+background.js:3224  ⚡ [ACTIONS] 1 ordres en attente du Manager ! Exécution séquentielle...
+background.js:3238  ⚡ [EXECUTE] Ordre SEND_MESSAGE (ID: b5c6a173-ad29-4b49-b543-8cc591e543f1)
+background.js:3359  ✅ [EXECUTE] Succès pour l'action #b5c6a173-ad29-4b49-b543-8cc591e543f1
+...
+background.js:3238  ⚡ [EXECUTE] Ordre SEND_MESSAGE (ID: e155c1f6-a571-491a-b0a1-4a12786c526e)
+background.js:3359  ✅ [EXECUTE] Succès pour l'action #e155c1f6-a571-491a-b0a1-4a12786c526e
+background.js:2526  📨 [SYNC INBOX] Lancement de l'aspiration de la messagerie...
+background.js:2877  ✅ [SYNC INBOX] 15 conversations sauvegardées !
+```
+→ 3 envois `SEND_MESSAGE` consécutifs, tous **SUCCESS** (puis re‑sync inbox automatique 2 s après, cf `background.js:3377`).
+
+### 🟠 Auto‑bordereau — `GENERATE_LABEL` bloqué CORS sur le download S3
+```
+background.js:3238  ⚡ [EXECUTE] Ordre GENERATE_LABEL (ID: c9df127a-3b09-487a-b44d-b0fc1907e60e)
+Access to fetch at 'https://svc-shipping-labels.s3.eu-central-1.amazonaws.com/8co6kfe2t33mhcq2ekpd4bgzs6zc?...&X-Amz-...=...pdf'
+  from origin 'chrome-extension://hgjejccfigeommlgkcdclkobcbapphlj'
+  has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource.
+background.js:3362  ❌ [EXECUTE] Échec pour l'action #c9df127a-... : Failed to fetch
+    @ pollActionQueueFromManager @ background.js:3362
+```
+→ Le PUT de génération **passe** (URL S3 obtenue), c'est le `fetch(labelUrl)` du **service worker** qui est bloqué par CORS (origine `chrome-extension://`). Voir §13 (piste `rules_label_bucket.json` de Vinteo).
+
+### Contexte sync (déroulé nominal, pour repère)
+```
+background.js:2145  💰 [SYNC] Identité détectée : yazz_tw (69059956)
+background.js:2246  💰 [SYNC] Solde scrappé : Dispo=225€, Attente=110€
+background.js:2405  🛒 [SYNC ORDERS] Aspiration réussie : 35 ventes trouvées.
+background.js:2492  ✅ [SYNC ORDERS] Succès complet vers .../api/comptabilite/orders !
+background.js:3091  ✅ [SYNC METRICS] 51 articles, 27 Winners !
+background.js:1994  ❤️ [API SCAN] NOUVEAU like API de <user> sur item #<id> → Envoi DM invisible
+```
+
+> ⚠️ Rappel sécurité : `bugextension.txt` peut contenir des tokens/URLs signées (l'URL S3 ci‑dessus est temporaire, `X-Amz-Expires`). Penser à vider le fichier après usage.
+
+---
+
+## 15. Session 2026-06-21 — Routine de publication quotidienne (⚠️ EN COURS, cadrage)
+
+> Concerne le pipeline **`vinted_bot/`** (génération images IA + `publier_tous.py`), PAS l'extension/manager. À reprendre.
+
+**Objectif** : automatiser une routine quotidienne de publication = **10 annonces/jour, en 2 salves de 5** (matin ~9h, puis ~6h après). **Chaque salve de 5 est un mix moitié-moitié fake / produit réel** (donc ~2-3 produits IA + ~2-3 fakes par salve). À terme les produits viendront du **scraping Shein** ; pour l'instant on fournit le stock à la main.
+
+### Sources de données (2 dossiers sur le Bureau)
+- **`~/Desktop/Banque d'image Fake Annonce-20260621T115637Z-3-001/Banque d_image Fake Annonce/`** → **139** dossiers `Produit_XX`, ~3 **vraies photos** chacun = les **FAKES**. Postés **tels quels** (photos réelles, PAS de génération IA / pas d'avatar). Correspond au concept `Fake_Bank` de `build_fakes.py`.
+- **`~/Desktop/Winner-20260621T121118Z-3-001/Winner/`** → **24** captures d'écran = les **PRODUITS** (winners Shein). Passent par la **génération IA par compte** (`generer_tous.py` → `processor.py` analyse Gemini + `nano_banana.py` 3 images avatar/selfie/cintre).
+
+### Existant réutilisable (déjà fonctionnel — voir [[vintedbot-setup]])
+- `generer_tous.py <photo_produit> [comptes]` → pour 1 photo produit : analyse + 3 images IA par compte → `_test_out_<compte>/` (titre.txt, description.txt, images).
+- `publier_tous.py [comptes] [--submit]` → publie brouillon (ou réel avec `--submit`) sur chaque compte via UNE instance Brave (CDP port 9220), un onglet/profil par compte. Pause anti-bot 15-30 s entre comptes.
+- `build_fakes.py` / `fake_bank_builder.py` → construit `Fake_Bank/item_<ts>_<nom>/` depuis des dossiers de photos brutes (titre/desc Gemini, photos copiées telles quelles).
+- Mapping comptes → profils Brave : emma=Profile1=emma_clt3 · Yazz=Profile2=yazz_tw · nina=Profile4=nina_mamey · lena=Profile5=lenabalvade · orane=Profile6=orane_dlt.
+
+### Contexte comptes (état au 2026-06-21)
+- **Tous les produits (Winner) sont déjà publiés sur `yazz`**, et **certains sur `emma`**.
+- À faire : **propager sur `lena`, `nina`, `orane`**. MAIS **`lena` et `nina` sont BAN temporairement** → pour le test on **publie en réel UNIQUEMENT sur `orane`** (`--submit`).
+
+### Logique cible à construire
+- Un orchestrateur "salve" qui : pioche 5 items (mix ~moitié fakes / moitié produits) → fakes postés tels quels, produits passés par génération IA → publie par compte.
+- 2 salves/jour (matin + ~6h après).
+- Besoin d'un **état/queue** pour suivre quels produits/fakes déjà postés sur quel compte (éviter doublons, savoir quoi poster ensuite).
+
+### ❓ Questions ouvertes (à trancher avec l'utilisateur avant de coder)
+1. **Volume** : 10/jour **par compte** (chaque compte ses 10) ou **au total** réparti sur les comptes ?
+2. **Déclenchement** : tâche planifiée Windows auto (réveil 9h + ~15h, `--submit`, suppose Brave + profils ouverts/connectés en permanence) **ou** script lancé manuellement 2×/jour ?
+3. **Périmètre test (lena/nina ban)** : générer pour lena+nina+orane mais ne publier réellement que orane (lena/nina en file/brouillon) **ou** ne traiter qu'orane pour l'instant ?
+
+> Salve confirmée par l'utilisateur : « une salve de 5 le matin en faisant 1/2 fake real, et pareil le soir ».
+
+---
+
+## 16. Session 2026-06-25 — Offres dans la messagerie (faire / accepter / contre-offrir / refuser) ✅ codé, ⚠️ non testé en réel
+
+**Objectif** : depuis les discussions du Manager, pouvoir **proposer un prix, accepter une offre, faire une contre-offre et refuser** — comme Vinteo.
+
+### 🔎 Diagnostic : la feature était DÉJÀ codée des deux côtés (mais jamais validée)
+Contrairement à ce que laissait penser §13 (qui ne validait que `SEND_MESSAGE`), tout le pipeline offres existait déjà : UI Manager (banner « Offre reçue », boutons Accepter/Contre-offre, modale, rendu messages `type:"offer"`), handlers extension `ACCEPT_OFFER`/`COUNTER_OFFER`, et détection `hasOffer`/`offerPrice` dans la sync inbox. **Les endpoints correspondaient déjà exactement à Vinteo** (comparé ligne à ligne dans `vinteo-extension/background/service-worker.js`) :
+- Accepter → `PUT /api/v2/transactions/{tx}/offer_requests/{offerRequestId}/accept`
+- Refuser → `PUT .../offer_requests/{offerRequestId}/reject`
+- Contre-offre / proposition → `POST /api/v2/transactions/{tx}/offers` body `{offer:{price:parseFloat,currency:"EUR"}}` (fallback `POST /api/v2/items/{itemId}/offers` body `{price}` si pas de transaction).
+
+Toutes ces écritures partent en **`world:"MAIN"`** (cf §6.1) via `executeBotAction`.
+
+### 🐛 Bug bloquant trouvé + corrigé (`background.js`)
+**Incohérence détection ↔ acceptation** : la sync inbox détectait une offre sur **4 types d'entité** (`OfferRequest`, `Offer`, `offer_request_message`, `offer_message`) avec heuristique souple (`status/state==="pending"` OU `current===true && !status_title`), mais `ACCEPT_OFFER` ne cherchait l'`offerRequestId` que sur **2 types** avec `status==="pending"` strict → le banner « Accepter » pouvait s'afficher alors que le clic plantait sur « Aucune offre détectée ».
+**Fix** : nouvelle fonction partagée `findPendingOfferRequestId(conv)` (définie dans le `func` injecté de `executeBotAction`, juste après `getHeaders`) qui **réplique la logique de la sync** + fallback sur `conv.transaction.offer.id`. Utilisée par Accepter ET Refuser.
+
+### ✅ Changements
+- **`vinted-extension/background.js`** (⚠️ **recharger l'extension**) :
+  - `findPendingOfferRequestId()` partagée (détection alignée sur la sync).
+  - Branche `ACCEPT_OFFER` fusionnée avec **`REJECT_OFFER`** (même endpoint, verbe `accept`/`reject`).
+  - Re-sync inbox après succès élargie à `ACCEPT_OFFER`/`REJECT_OFFER`/`COUNTER_OFFER` (avant : seulement `SEND_MESSAGE`/`ACCEPT_OFFER`).
+- **`vinted-manager/src/app/inbox/page.tsx`** (déploiement Vercel, pas de reload) :
+  - Type `pushAction` + handler `handleRejectOffer` → action `REJECT_OFFER`.
+  - **Bouton Refuser** (rouge) dans le banner d'offre reçue.
+  - **Bouton « Proposer un prix »** proactif dans la barre du haut, visible **uniquement si `!hasOffer`** (réutilise la modale + l'endpoint contre-offre). Modale adaptée (titre « Proposer un prix » / masque le rappel « offre reçue »).
+  - Re-sync auto après action offre : 3 `fetchInbox(true)` à 5/9/14 s (l'extension re-synchronise ~2 s après le succès).
+
+### ✅ Vérifs faites
+- `node --check background.js` OK · `tsc --noEmit` sans erreur sur `inbox/page.tsx`.
+
+### ⚠️ À FAIRE / valider
+1. **Recharger l'extension** (`chrome://extensions` → ↻) + **déployer le Manager** (`vercel --prod --yes` depuis `vinted-manager/`, `git fetch` d'abord cf §10/§12).
+2. **Tester** : Contre-offre et « Proposer un prix » testables tout de suite ; **Accepter/Refuser nécessitent une vraie offre acheteur en attente**. Vérifier que `BotActionQueue` passe en `SUCCESS`.
+3. Anti-bot (§6.6) : ce sont des **écritures** → espacer les actions. Prix **≥ 1 €** (sinon `validation_error`).
+4. Pas encore commité/poussé (repo partagé, CRLF/LF cf §12 → stager fichier par fichier).

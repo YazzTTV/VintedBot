@@ -150,6 +150,7 @@ async function fetchUserIdentityDirect(tabId) {
         }
         const injection = await chrome.scripting.executeScript({
             target: { tabId },
+            world: "MAIN", // CRITIQUE : /api/v2/users/current rejette aussi le monde isolé. Same-origin réel requis.
             func: async () => {
                 try {
                     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
@@ -178,6 +179,80 @@ async function fetchUserIdentityDirect(tabId) {
     } catch (e) {
         // L'onglet a navigué vers une page non-autorisée entre la détection et l'injection
         console.warn("⚠️ [IDENTITY] Impossible d'injecter dans l'onglet:", e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+/**
+ * 🔑 Effectue un appel à l'API Vinted DEPUIS LE CONTEXTE DE LA PAGE (monde MAIN),
+ * exactement comme le ferait le site lui-même → same-origin parfait.
+ *
+ * CRITIQUE (cf. §6.1 du doc + extension de référence Vinteo) : les endpoints protégés
+ * (/api/v2/inbox, /api/v2/conversations, écritures…) renvoient 403 access_denied si la
+ * requête part du service worker (Origin: chrome-extension://) et échouent en
+ * "Failed to fetch" depuis le monde ISOLÉ. Seul le monde MAIN passe de façon fiable.
+ *
+ * Renvoie le même format que vintedFetch : { success, status, data, error }.
+ */
+async function vintedFetchInPage(tabId, endpoint, options = {}) {
+    try {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        if (!tab || !isVintedUrl(tab.url)) {
+            return { success: false, error: "L'onglet n'est plus sur une page Vinted" };
+        }
+        const injection = await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "MAIN",
+            args: [endpoint, options],
+            func: async (endpoint, options) => {
+                try {
+                    // CSRF : meta tag d'abord, fallback sur les scripts inline
+                    let csrf = null;
+                    const meta = document.querySelector('meta[name="csrf-token"]');
+                    if (meta && meta.content) csrf = meta.content;
+                    if (!csrf) {
+                        for (const s of document.querySelectorAll("script")) {
+                            const m = (s.textContent || "").match(/"csrf[_-]token"\s*[:,]\s*"([^"]+)"/);
+                            if (m) { csrf = m[1]; break; }
+                        }
+                    }
+
+                    const headers = {
+                        "Accept": "application/json, text/plain, */*",
+                        "X-Money-Object": "true"
+                    };
+                    if (csrf) headers["X-CSRF-Token"] = csrf;
+
+                    // anon_id depuis le cookie (même origine)
+                    const ck = document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("anon_id="));
+                    if (ck) headers["X-Anon-Id"] = ck.substring(8);
+
+                    // Headers custom éventuels passés par l'appelant
+                    if (options && options.headers) Object.assign(headers, options.headers);
+
+                    const method = (options && options.method) || "GET";
+                    const url = endpoint.startsWith("http") ? endpoint : (window.location.origin + endpoint);
+                    const fetchOpts = { method, credentials: "include", headers };
+
+                    if (options && options.body != null && method !== "GET") {
+                        if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+                        fetchOpts.body = typeof options.body === "string" ? options.body : JSON.stringify(options.body);
+                    }
+
+                    const r = await fetch(url, fetchOpts);
+                    const ct = r.headers.get("content-type") || "";
+                    let data;
+                    if (ct.includes("application/json")) data = await r.json();
+                    else data = await r.text();
+                    return { success: r.ok, status: r.status, data };
+                } catch (e) {
+                    return { success: false, error: e.message };
+                }
+            }
+        });
+        return injection?.[0]?.result || { success: false, error: "Injection vide (monde MAIN)" };
+    } catch (e) {
+        console.warn("⚠️ [vintedFetchInPage] Échec injection:", e.message);
         return { success: false, error: e.message };
     }
 }
@@ -2062,7 +2137,7 @@ async function syncAccountBalanceToManager(force = false) {
         const userRes = await fetchUserIdentityDirect(tabId);
 
         if (!userRes || !userRes.success) {
-            throw new Error("Impossible de détecter votre identité Vinted. Assurez-vous d'être connecté à votre compte !");
+            throw new Error(`Impossible de détecter votre identité Vinted (${userRes?.error || 'raison inconnue'}). Assurez-vous d'être connecté à votre compte !`);
         }
 
         const username = userRes.username;
@@ -2265,7 +2340,7 @@ async function syncVintedOrdersToManager() {
         const userRes = await fetchUserIdentityDirect(tabId);
 
         if (!userRes || !userRes.success) {
-            throw new Error("Impossible de détecter votre identité Vinted.");
+            throw new Error(`Impossible de détecter votre identité Vinted (${userRes?.error || 'raison inconnue'}).`);
         }
 
         const username = userRes.username;
@@ -2462,7 +2537,7 @@ async function syncVintedInboxToManager() {
         const userRes = await fetchUserIdentityDirect(tabId);
 
         if (!userRes || !userRes.success) {
-            throw new Error("Impossible de détecter votre profil Vinted actif sur l'onglet.");
+            throw new Error(`Impossible de détecter votre profil Vinted actif sur l'onglet (${userRes?.error || 'raison inconnue'}). Vérifiez que l'onglet Vinted est bien connecté.`);
         }
 
         const botName = userRes.username;
@@ -2477,6 +2552,7 @@ async function syncVintedInboxToManager() {
 
         const injection = await chrome.scripting.executeScript({
             target: { tabId },
+            world: "MAIN", // CRITIQUE : /api/v2/inbox & /conversations rejettent le monde isolé ("Failed to fetch"). Same-origin réel requis.
             args: [inboxCache, botId, botName],
             func: async (cache, botId, botName) => {
                 try {
@@ -2579,11 +2655,28 @@ const cachedTime = cache[idStr];
                             
                                 // C) Résolution de l'ID du message (très important pour l'upsert Prisma!)
                                 const messageId = String(m.entity?.id || m.id || `msg_${Date.now()}_${Math.random()}`);
-                            
+
+                                // D) Type de message : offre de prix / notification système / message normal
+                                const OFFER_TYPES = ["OfferRequest", "Offer", "offer_request_message", "offer_message"];
+                                let msgType = "message";
+                                let msgPrice = null;
+                                if (m.entity && OFFER_TYPES.includes(m.entity_type)) {
+                                    msgType = "offer";
+                                    const p = m.entity.price;
+                                    if (p != null) msgPrice = parseFloat(p.amount != null ? p.amount : p);
+                                    else if (m.entity.price_label) msgPrice = parseFloat(String(m.entity.price_label).replace(/[^\d.,]/g, "").replace(",", "."));
+                                    if (isNaN(msgPrice)) msgPrice = null;
+                                } else if (sender === "Système") {
+                                    // Pas d'expéditeur humain résolu → notification Vinted (vendu, expédié, rappel sécurité…)
+                                    msgType = "status";
+                                }
+
                                 return {
                                     id: messageId,
                                     content: content || "Notification Vinted",
                                     senderUsername: sender,
+                                    type: msgType,
+                                    offerPrice: msgPrice,
                                     createdAtVinted: m.created_at_ts || m.created_at || new Date().toISOString()
                                 };
                             });
@@ -3107,8 +3200,11 @@ async function pollActionQueueFromManager() {
         for (const url of urlsToTry) {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 3000);
-                
+                // 15s (pas 3s) : le GET marque les ordres RUNNING côté serveur AVANT de répondre.
+                // Si on abandonnait à 3s (cold start Vercel/Supabase), l'ordre resterait RUNNING
+                // orphelin et ne réapparaîtrait jamais en PENDING → jamais exécuté (ex: SEND_MESSAGE).
+                const timeoutId = setTimeout(() => controller.abort(), 15000);
+
                 const res = await fetch(url, { signal: controller.signal });
                 clearTimeout(timeoutId);
 
@@ -3239,8 +3335,18 @@ async function pollActionQueueFromManager() {
                             const managerUrlObj = new URL(activeBaseUrl);
                             const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
 
-                            // Téléchargement du PDF
-                            const pdfRes = await fetch(labelUrl);
+                            // Téléchargement du PDF.
+                            // - Si labelUrl est un data:base64 (via pdf_label same-origin) → fetch local, AUCUN CORS.
+                            // - Si c'est une URL S3 (svc-shipping-labels…amazonaws.com) → le SW peut la télécharger
+                            //   UNIQUEMENT parce que le domaine est désormais dans host_permissions (manifest).
+                            //   Sans ça → CORS « Failed to fetch ».
+                            let pdfRes;
+                            try {
+                                pdfRes = await fetch(labelUrl);
+                            } catch (fetchErr) {
+                                throw new Error(`Téléchargement PDF bloqué (CORS ?) : ${fetchErr.message}. URL=${String(labelUrl).slice(0, 60)}…`);
+                            }
+                            if (!pdfRes.ok) throw new Error(`Téléchargement PDF a échoué: HTTP ${pdfRes.status}`);
                             const pdfBlob = await pdfRes.blob();
                             
                             const formData = new FormData();
@@ -3277,7 +3383,7 @@ async function pollActionQueueFromManager() {
                         })
                     });
 
-                    if (success && (action.actionType === "SEND_MESSAGE" || action.actionType === "ACCEPT_OFFER")) {
+                    if (success && ["SEND_MESSAGE", "ACCEPT_OFFER", "REJECT_OFFER", "COUNTER_OFFER"].includes(action.actionType)) {
                         setTimeout(() => syncVintedInboxToManager(), 2000);
                     }
                 } catch (patchErr) {
@@ -3312,15 +3418,51 @@ async function executeBotAction(tabId, action) {
         target: { tabId },
         world: "MAIN", // CRITIQUE : les écritures sensibles (ex: PUT /shipment/order) sont rejetées
                        // (403 code 106 access_denied) hors du contexte page. Cf récap §6.1.
-        func: async (type, pay) => {
-            const csrfMeta = document.querySelector('meta[name="csrf-token"]');
-            const csrf = csrfMeta ? csrfMeta.content : null;
-            
+        func: async (type, pay, capturedCsrf, capturedAnonId) => {
+            // --- CSRF : priorité aux tokens RÉELS interceptés (webRequest), sinon meta tag, sinon scripts inline ---
+            // Le meta tag est souvent périmé/absent (SPA) → 403 access_denied (code 106) sur les écritures.
+            // C'est exactement ce que fait le repost (qui fonctionne). Cf §6.3.
+            let csrf = capturedCsrf || null;
+            if (!csrf) {
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta && meta.content) csrf = meta.content;
+            }
+            if (!csrf) {
+                for (const s of document.querySelectorAll("script")) {
+                    const m = s.textContent && s.textContent.match(/"csrf[_-]token"\s*[:,]\s*"([^"]+)"/);
+                    if (m) { csrf = m[1]; break; }
+                }
+            }
+            // anon_id : token capturé d'abord, sinon cookie.
+            const anonCk = document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("anon_id="));
+            const anonId = capturedAnonId || (anonCk ? anonCk.substring(8) : null);
+
             const getHeaders = (isJson = true) => {
                 const h = { "Accept": "application/json", "X-Money-Object": "true" };
                 if (csrf) h["X-CSRF-Token"] = csrf;
+                if (anonId) h["X-Anon-Id"] = anonId;
                 if (isJson) h["Content-Type"] = "application/json";
                 return h;
+            };
+
+            // Détection de l'offre en attente — MÊME logique que la sync inbox (cf §6 / syncVintedInboxToManager)
+            // pour éviter l'incohérence "le banner s'affiche mais Accepter/Refuser ne trouve pas l'offre".
+            const OFFER_ENTITY_TYPES = ["OfferRequest", "Offer", "offer_request_message", "offer_message"];
+            const findPendingOfferRequestId = (conv) => {
+                let id = null;
+                for (const m of (conv.messages || [])) {
+                    if (!m.entity || !OFFER_ENTITY_TYPES.includes(m.entity_type)) continue;
+                    const ent = m.entity;
+                    if (ent.current === false) continue; // offre fermée/expirée
+                    const isPending = ent.status === "pending" || ent.state === "pending" || (ent.current === true && !ent.status_title);
+                    if (isPending && ent.id) id = ent.id; // garder la PLUS RÉCENTE offre en attente
+                }
+                // Fallback : offre portée directement par la transaction (Stratégie B de la sync)
+                if (!id && conv.transaction && conv.transaction.offer && conv.transaction.offer.id) {
+                    const off = conv.transaction.offer;
+                    if (off.status === "pending" || off.state === "pending" || off.current === true) id = off.id;
+                }
+                return id;
             };
 
             try {
@@ -3349,44 +3491,35 @@ async function executeBotAction(tabId, action) {
                     return { ok: true };
                 }
 
-                if (type === "ACCEPT_OFFER") {
+                if (type === "ACCEPT_OFFER" || type === "REJECT_OFFER") {
                     const { conversationId } = pay;
                     if (!conversationId) throw new Error("conversationId manquant");
 
                     // 1. Récupérer en temps réel les identifiants dynamiques de transaction
                     const convRes = await fetch(`/api/v2/conversations/${conversationId}`, { credentials: "include", headers: getHeaders(false) });
                     if (!convRes.ok) throw new Error("Impossible de lire la conversation.");
-                    
+
                     const cData = await convRes.json();
                     const conv = cData.conversation || cData;
 
                     const transactionId = conv.transaction ? conv.transaction.id : null;
-                    
-                    // Chercher l'ID de l'offre active en cours
-                    let offerRequestId = null;
-                    for (const m of conv.messages || []) {
-                        if ((m.entity_type === "OfferRequest" || m.entity_type === "Offer") && m.entity) {
-                            if (m.entity.status === "pending" || m.entity.state === "pending") {
-                                offerRequestId = m.entity.id;
-                                break;
-                            }
-                        }
-                    }
+                    const offerRequestId = findPendingOfferRequestId(conv);
 
                     if (!transactionId || !offerRequestId) {
                         throw new Error("Aucune transaction ou offre en cours détectée sur ce fil.");
                     }
 
-                    // 2. Appeler l'API Native Vinted d'Acceptation d'Offre !
-                    const acceptRes = await fetch(`/api/v2/transactions/${transactionId}/offer_requests/${offerRequestId}/accept`, {
+                    // 2. Accepter OU refuser l'offre via l'API native Vinted (même endpoint que Vinteo)
+                    const verb = type === "ACCEPT_OFFER" ? "accept" : "reject";
+                    const actRes = await fetch(`/api/v2/transactions/${transactionId}/offer_requests/${offerRequestId}/${verb}`, {
                         method: "PUT",
                         credentials: "include",
                         headers: getHeaders(false) // Pas de body JSON requis
                     });
 
-                    if (!acceptRes.ok) {
-                        const txt = await acceptRes.text();
-                        throw new Error(`Rejet Acceptation (${acceptRes.status}) : ${txt}`);
+                    if (!actRes.ok) {
+                        const txt = await actRes.text();
+                        throw new Error(`Échec ${verb} offre (${actRes.status}) : ${txt}`);
                     }
                     return { ok: true };
                 }
@@ -3592,8 +3725,19 @@ async function executeBotAction(tabId, action) {
 
                     let diag = '';
 
-                    // Helper : lit le label (label_url shipment + fallback pdf_label transaction).
+                    // Helper : lit le label. On PRÉFÈRE pdf_label (PDF base64 same-origin Vinted → AUCUN CORS),
+                    // car label_url renvoie une URL S3 cross-origin dont le téléchargement est bloqué par CORS
+                    // (svc-shipping-labels.s3…). label_url reste un fallback (le SW peut le télécharger grâce
+                    // à host_permissions *.amazonaws.com).
                     const readLabel = async (shipmentId) => {
+                        try {
+                            const r = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/pdf_label`, { credentials: "include", headers: getHeaders(false) });
+                            if (r.ok) {
+                                const d = await r.json();
+                                if (d && d.file && d.file.label) return "data:application/pdf;base64," + d.file.label;
+                                diag += `pdf_label=${JSON.stringify(d).slice(0, 80)} `;
+                            } else diag += `pdf_label:HTTP${r.status} `;
+                        } catch (e) { diag += `pdf_label:err `; }
                         if (shipmentId) {
                             try {
                                 const r = await fetch(`/api/v2/shipments/${shipmentId}/label_url`, { credentials: "include", headers: getHeaders(false) });
@@ -3605,14 +3749,6 @@ async function executeBotAction(tabId, action) {
                                 } else diag += `label_url:HTTP${r.status} `;
                             } catch (e) { diag += `label_url:err `; }
                         }
-                        try {
-                            const r = await fetch(`/api/v2/transactions/${vintedTransactionId}/shipment/pdf_label`, { credentials: "include", headers: getHeaders(false) });
-                            if (r.ok) {
-                                const d = await r.json();
-                                if (d && d.file && d.file.label) return "data:application/pdf;base64," + d.file.label;
-                                diag += `pdf_label=${JSON.stringify(d).slice(0, 80)} `;
-                            } else diag += `pdf_label:HTTP${r.status} `;
-                        } catch (e) { diag += `pdf_label:err `; }
                         return null;
                     };
 
@@ -3700,7 +3836,7 @@ async function executeBotAction(tabId, action) {
                 return { ok: false, error: (err && err.message) ? err.message : String(err) };
             }
         },
-        args: [actionType, payload]
+        args: [actionType, payload, vintedTokens.csrf, vintedTokens.anonId]
     });
 
     const finalRes = result?.[0]?.result;
@@ -3753,7 +3889,7 @@ async function runGeminiScan(force = false) {
             console.log(`🤖 [GEMINI] Identité active : ${botName} (#${botId})`);
             
             // 2. Fetch des fils récents via REST API (Endpoint correct : /inbox)
-            const inboxRes = await vintedFetch("/api/v2/inbox?per_page=10");
+            const inboxRes = await vintedFetchInPage(optimalTab.id, "/api/v2/inbox?per_page=10");
             if (!inboxRes.success) {
                 console.error("❌ [GEMINI] Impossible de lire l'inbox via REST :", inboxRes.status, inboxRes.error);
                 const detail = inboxRes.error ? inboxRes.error.substring(0, 15) : `HTTP ${inboxRes.status}`;
@@ -3795,7 +3931,7 @@ async function runGeminiScan(force = false) {
                 const opponentId = c.opposite_user?.id ? String(c.opposite_user.id) : null;
                 
                 // 4. Lecture détaillée du fil (historique complet et métadonnées riches de l'article)
-                const detailRes = await vintedFetch(`/api/v2/conversations/${convId}`);
+                const detailRes = await vintedFetchInPage(optimalTab.id, `/api/v2/conversations/${convId}`);
                 if (!detailRes.success) continue;
                 
                 const details = detailRes.data.conversation || detailRes.data || {};
@@ -3955,6 +4091,7 @@ async function runGeminiScan(force = false) {
                             
                             await chrome.scripting.executeScript({
                                 target: { tabId: optimalTab.id },
+                                world: "MAIN", // CRITIQUE : POST /replies (écriture) rejeté en monde isolé/SW → same-origin réel requis.
                                 func: async (cid, text, offerPrice) => {
                                     const csrfMeta = document.querySelector('meta[name="csrf-token"]');
                                     const headers = { "Accept": "application/json", "Content-Type": "application/json", "X-Money-Object": "true" };

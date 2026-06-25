@@ -111,7 +111,7 @@ export default function InboxPage() {
   }, [conversations, selectedConvId])
 
   // 🚀 TRANSMETTRE UN ORDRE À LA FILE D'ATTENTE (BotActionQueue)
-  const pushAction = async (type: "SEND_MESSAGE" | "ACCEPT_OFFER" | "COUNTER_OFFER", payload: any) => {
+  const pushAction = async (type: "SEND_MESSAGE" | "ACCEPT_OFFER" | "REJECT_OFFER" | "COUNTER_OFFER", payload: any) => {
     if (!activeConv) return
     
     setActionLoadingId(type)
@@ -158,6 +158,11 @@ export default function InboxPage() {
             return c
           }))
           setReplyText("")
+        } else {
+          // Offres (accepter / refuser / contre-offre) : l'extension exécute puis re-synchronise
+          // l'inbox (~2 s après le succès, cf background.js). On rafraîchit en silence pour voir le
+          // résultat (offre disparue / nouveau message d'offre) sans attendre le poll de 15 s.
+          ;[5000, 9000, 14000].forEach((d) => setTimeout(() => fetchInbox(true), d))
         }
       } else {
         throw new Error(result.error || "Échec de transmission")
@@ -180,6 +185,13 @@ export default function InboxPage() {
     if (!activeConv) return
     if (confirm(`Accepter définitivement l'offre de ${Number(activeConv.offerPrice).toFixed(2)} € ?`)) {
       pushAction("ACCEPT_OFFER", { conversationId: activeConv.id, amount: Number(activeConv.offerPrice) })
+    }
+  }
+
+  const handleRejectOffer = () => {
+    if (!activeConv) return
+    if (confirm(`Refuser l'offre de ${Number(activeConv.offerPrice).toFixed(2)} € ?`)) {
+      pushAction("REJECT_OFFER", { conversationId: activeConv.id })
     }
   }
 
@@ -393,6 +405,14 @@ export default function InboxPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {!activeConv.hasOffer && (
+                    <button
+                      onClick={() => setShowCounterModal(true)}
+                      className="p-2 px-3 bg-emerald-600/90 text-white rounded-xl hover:bg-emerald-500 transition-all flex items-center gap-1.5 text-xs font-bold cursor-pointer shadow-sm shadow-emerald-900/30"
+                    >
+                      <DollarSign className="w-3.5 h-3.5" /> Proposer un prix
+                    </button>
+                  )}
                   {activeConv.itemId && (
                     <a
                       href={`https://www.vinted.fr/items/${activeConv.itemId}`}
@@ -426,13 +446,21 @@ export default function InboxPage() {
                     </div>
 
                     <div className="flex items-center gap-2.5 w-full sm:w-auto flex-shrink-0">
-                      <button 
+                      <button
+                        onClick={handleRejectOffer}
+                        disabled={actionLoadingId === "REJECT_OFFER"}
+                        className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-rose-950/40 border border-rose-800/40 text-rose-300 hover:text-white hover:bg-rose-900/50 text-xs font-bold transition-all hover:-translate-y-0.5 flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+                      >
+                        {actionLoadingId === "REJECT_OFFER" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <X className="w-3.5 h-3.5" />}
+                        Refuser
+                      </button>
+                      <button
                         onClick={() => setShowCounterModal(true)}
                         className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-200 hover:text-white text-xs font-bold transition-all hover:bg-zinc-800 hover:-translate-y-0.5 flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
                       >
                         <ArrowRightLeft className="w-3.5 h-3.5" /> Contre-Offre
                       </button>
-                      <button 
+                      <button
                         onClick={handleAcceptOffer}
                         disabled={actionLoadingId === "ACCEPT_OFFER"}
                         className="flex-1 sm:flex-none px-5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-extrabold shadow-lg shadow-emerald-900/30 hover:bg-emerald-500 transition-all hover:-translate-y-0.5 flex items-center justify-center gap-1.5 cursor-pointer"
@@ -494,32 +522,65 @@ export default function InboxPage() {
                             </span>
                           </div>
                         )}
-                        <div 
-                          className={cn(
+                        {msg.type === "status" ? (
+                          /* 🔔 Notification système Vinted (vendu, expédié, rappel sécurité…) — centrée et discrète */
+                          <div className="flex justify-center w-full py-1">
+                            <span className="max-w-[85%] text-center px-3 py-1.5 rounded-lg bg-zinc-900/60 border border-zinc-800/50 text-[11px] text-zinc-500 italic">
+                              {msg.content}
+                            </span>
+                          </div>
+                        ) : msg.type === "offer" ? (
+                          /* 💰 Proposition de prix — visuellement très différente d'un message normal */
+                          <div className={cn(
                             "flex flex-col max-w-[75%] animate-in fade-in duration-200",
                             isMe ? "ml-auto items-end" : "items-start"
-                          )}
-                        >
-                          {/* Expéditeur Label */}
-                          <span className="text-[10px] text-zinc-500 mb-1 font-semibold tracking-wide uppercase px-1">
-                            {isMe ? `Moi (${activeConv.botAccount.name})` : msg.senderUsername}
-                          </span>
-                          
-                          {/* Bulle de Message */}
-                          <div className={cn(
-                            "px-4 py-3 rounded-2xl text-sm leading-relaxed relative break-words whitespace-pre-line w-full border",
-                            isMe 
-                              ? `${getAccountStyle(activeConv.botAccount.name).bg} text-zinc-100 ${getAccountStyle(activeConv.botAccount.name).border} rounded-tr-sm ${getAccountStyle(activeConv.botAccount.name).glow}` 
-                              : "bg-zinc-900/90 text-zinc-100 border-zinc-800 rounded-tl-sm shadow-black/20"
                           )}>
-                            {msg.content}
+                            <span className="text-[10px] text-zinc-500 mb-1 font-semibold tracking-wide uppercase px-1 flex items-center gap-1">
+                              <ArrowRightLeft className="w-2.5 h-2.5" />
+                              {isMe ? `Contre-offre · Moi (${activeConv.botAccount.name})` : `Proposition · @${msg.senderUsername}`}
+                            </span>
+                            <div className="px-4 py-3 rounded-2xl border border-emerald-500/30 bg-emerald-500/10 rounded-tl-sm shadow-[0_0_12px_rgba(16,185,129,0.12)] flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 flex items-center justify-center flex-shrink-0">
+                                <DollarSign className="w-4 h-4" />
+                              </div>
+                              <div className="leading-tight">
+                                <div className="text-[9px] uppercase font-black tracking-wider text-emerald-400/80">Proposition de prix</div>
+                                <div className="text-lg font-black text-emerald-300">
+                                  {msg.offerPrice != null ? `${Number(msg.offerPrice).toFixed(2)} €` : msg.content}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="text-[9px] text-zinc-600 font-mono mt-1 px-1">{msgTime}</span>
                           </div>
+                        ) : (
+                          /* 💬 Message normal */
+                          <div
+                            className={cn(
+                              "flex flex-col max-w-[75%] animate-in fade-in duration-200",
+                              isMe ? "ml-auto items-end" : "items-start"
+                            )}
+                          >
+                            {/* Expéditeur Label */}
+                            <span className="text-[10px] text-zinc-500 mb-1 font-semibold tracking-wide uppercase px-1">
+                              {isMe ? `Moi (${activeConv.botAccount.name})` : `@${msg.senderUsername}`}
+                            </span>
 
-                          {/* Heure */}
-                          <span className="text-[9px] text-zinc-600 font-mono mt-1 px-1">
-                            {msgTime}
-                          </span>
-                        </div>
+                            {/* Bulle de Message */}
+                            <div className={cn(
+                              "px-4 py-3 rounded-2xl text-sm leading-relaxed relative break-words whitespace-pre-line w-full border",
+                              isMe
+                                ? `${getAccountStyle(activeConv.botAccount.name).bg} text-zinc-100 ${getAccountStyle(activeConv.botAccount.name).border} rounded-tr-sm ${getAccountStyle(activeConv.botAccount.name).glow}`
+                                : "bg-zinc-900/90 text-zinc-100 border-zinc-800 rounded-tl-sm shadow-black/20"
+                            )}>
+                              {msg.content}
+                            </div>
+
+                            {/* Heure */}
+                            <span className="text-[9px] text-zinc-600 font-mono mt-1 px-1">
+                              {msgTime}
+                            </span>
+                          </div>
+                        )}
                       </React.Fragment>
                     )
                   })
@@ -589,16 +650,18 @@ export default function InboxPage() {
                 <ArrowRightLeft className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-lg font-black text-white">Faire une Contre-Offre</h3>
+                <h3 className="text-lg font-black text-white">{activeConv.hasOffer ? "Faire une Contre-Offre" : "Proposer un prix"}</h3>
                 <p className="text-[11px] text-zinc-500">Pour @{activeConv.buyerUsername} • Vendu par {activeConv.botAccount.name}</p>
               </div>
             </div>
 
-            {/* Rappel du prix offert */}
-            <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-4 mb-6 flex justify-between items-center">
-              <span className="text-xs text-zinc-400">Offre initiale reçue :</span>
-              <span className="text-sm font-extrabold text-emerald-400">{Number(activeConv.offerPrice).toFixed(2)} €</span>
-            </div>
+            {/* Rappel du prix offert (uniquement si une offre acheteur est en cours) */}
+            {activeConv.hasOffer && (
+              <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-2xl p-4 mb-6 flex justify-between items-center">
+                <span className="text-xs text-zinc-400">Offre initiale reçue :</span>
+                <span className="text-sm font-extrabold text-emerald-400">{Number(activeConv.offerPrice).toFixed(2)} €</span>
+              </div>
+            )}
 
             <form onSubmit={handleCounterOfferSubmit} className="space-y-4">
               <div className="space-y-2">
