@@ -2681,34 +2681,54 @@ const cachedTime = cache[idStr];
                                 };
                             });
 
-                            // Détecter une offre FORMELLE en attente (acceptable/refusable).
+                            // Analyse des offres de la conversation.
                             // Statuts Vinted (offer_request_message) : 10=En attente, 20=Acceptée, 30=Refusée, 40=Annulée.
-                            // Les offer_message (sans status) sont des bulles de négociation, NON actionnables
-                            // via l'endpoint accept/reject -> on ne les compte pas comme "offre reçue".
+                            //   offerStatus (filtre Manager) reflète l'offre la plus pertinente :
+                            //   PENDING (offre reçue en attente) · PROPOSAL_SENT (notre proposition en attente)
+                            //   · ACCEPTED · REFUSED · CANCELLED · null (aucune offre).
+                            //   hasOffer = offre FORMELLE en attente émise par l'ACHETEUR (=> boutons Accepter/Refuser).
+                            // Les offer_message (sans status) sont des bulles de négociation, NON actionnables.
                             let hasOffer = false;
                             let offerPrice = null;
                             let offerStatus = null;
 
-                            // Stratégie A : offre formelle en attente émise par l'acheteur (la PLUS récente l'emporte)
+                            const priceOf = (e) => (e && e.price) ? parseFloat(e.price.amount || e.price) : null;
+                            let lastFormal = null;          // dernière offer_request_message / OfferRequest / Offer
+                            let lastInformalCurrent = null; // dernière offer_message active (négociation)
                             for (const m of details.messages || []) {
-                                if (!(m.entity_type === "offer_request_message" || m.entity_type === "OfferRequest" || m.entity_type === "Offer") || !m.entity) continue;
-                                const ent = m.entity;
-                                if (ent.current === false) continue;                 // offre close
-                                const isPending = Number(ent.status) === 10 || ent.status === "pending" || ent.state === "pending";
-                                if (!isPending) continue;                            // 10 = En attente uniquement
-                                if (String(ent.user_id) === String(botId)) continue; // doit venir de l'acheteur
-                                hasOffer = true;
-                                offerPrice = ent.price ? parseFloat(ent.price.amount || ent.price) : null;
-                                offerStatus = "PENDING";
+                                if (!m.entity) continue;
+                                const t = m.entity_type;
+                                if (t === "offer_request_message" || t === "OfferRequest" || t === "Offer") {
+                                    lastFormal = m.entity;
+                                } else if (t === "offer_message" && m.entity.current === true) {
+                                    lastInformalCurrent = m.entity;
+                                }
                             }
 
-                            // Stratégie B : offre portée par la transaction parente
+                            if (lastFormal) {
+                                const s = Number(lastFormal.status);
+                                const fromBuyer = String(lastFormal.user_id) !== String(botId);
+                                if (s === 20) offerStatus = "ACCEPTED";
+                                else if (s === 30) offerStatus = "REFUSED";
+                                else if (s === 40) offerStatus = "CANCELLED";
+                                else if (s === 10 || lastFormal.status === "pending" || lastFormal.state === "pending") {
+                                    offerStatus = fromBuyer ? "PENDING" : "PROPOSAL_SENT";
+                                    if (fromBuyer) hasOffer = true; // actionnable (Accepter/Refuser)
+                                }
+                                offerPrice = priceOf(lastFormal);
+                            } else if (lastInformalCurrent) {
+                                const fromBuyer = String(lastInformalCurrent.user_id) !== String(botId);
+                                offerStatus = fromBuyer ? "PENDING" : "PROPOSAL_SENT";
+                                offerPrice = priceOf(lastInformalCurrent);
+                            }
+
+                            // Fallback : offre portée par la transaction parente
                             if (!hasOffer && details.transaction && details.transaction.offer) {
                                 const off = details.transaction.offer;
                                 if (off.status === "pending" || off.state === "pending" || Number(off.status) === 10) {
                                     hasOffer = true;
-                                    offerPrice = off.price ? parseFloat(off.price.amount || off.price) : null;
-                                    offerStatus = "PENDING";
+                                    offerStatus = offerStatus || "PENDING";
+                                    if (offerPrice == null) offerPrice = priceOf(off);
                                 }
                             }
 

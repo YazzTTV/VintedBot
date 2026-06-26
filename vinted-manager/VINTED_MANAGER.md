@@ -343,3 +343,65 @@ Toutes ces écritures partent en **`world:"MAIN"`** (cf §6.1) via `executeBotAc
 ### ⚠️ À garder en tête
 - Anti-bot (§6.6) : ce sont des **écritures** → espacer les actions. Prix **≥ 1 €** (sinon `validation_error`).
 - Backlog non-offres commité « en l'état » (3 fichiers entiers + groupes thématiques) : peut contenir du travail antérieur d'autres sessions mélangé.
+
+---
+
+## 17. Session 2026-06-25 (suite) — Orchestrateur de salve OPÉRATIONNEL + publication réelle nina/lena/orane ✅
+
+> Concerne le pipeline **`vinted_bot/`** (pas l'extension/manager). Met à jour le §15 qui était au stade « cadrage » : **l'orchestrateur est maintenant codé et tourne en réel.**
+
+### ✅ L'orchestrateur "salve" est construit (répond aux questions ouvertes du §15)
+- **`salve.py`** — orchestrateur d'une salve. Pour chaque compte : pioche N winners frais (pas encore utilisés par CE compte) + N fakes globalement non assignés → génère IA les winners (analyse Gemini + 3 images via `nano_banana`) + titre/desc des fakes (photos copiées telles quelles) → **publie en intercalé** (winner, fake, winner…) via `vinted_publisher`, pauses anti-bot 15-30 s entre annonces + 20-40 s entre comptes → met à jour l'état anti-doublon.
+  - Flags : `--dry-run` (plan seul, ne persiste rien), `--generate-only`, `--submit` (réel), `--accounts`, `--winners N`, `--fakes N`, `--lock` (verrou manager best-effort).
+  - **Comptes par défaut (`AUTOMATION_ACCOUNTS`) = nina/lena/orane** (yazz/emma sortis : ils ont déjà la plupart des winners). Viser manuellement les autres via `--accounts`.
+- **`routine_state.py`** + **`routine_state.json`** — état local anti-doublon. **Winners = conso par compte** (`used_by[]`, réutilisable, mannequin/fond différents). **Fakes = single-use GLOBAL** (`{assigned_to, assigned_at, status}`). Écriture atomique. Conçu pour migrer vers le manager (remplacer load/save + pick_* par des appels API, mêmes clés `sourceKey`/`sourceFolder`).
+- **`routine_pools.py`** — découvre les sources sur le Bureau : WINNERS = `Winner*/Winner/` (24 captures), FAKES = `Banque*Fake*/Banque*/Produit_XX` (139 dossiers). Surchargables via env `WINNERS_DIR`/`FAKES_DIR`.
+- **`winner_prices.py` + `winner_prices.json`** — override de prix par winner (nombre = prix fixe ; `[min,max]` = fourchette custom pour Gemini ; sinon défaut 40-80 €).
+- **`run_salve_auto.bat`** — lance UNE salve d'automatisation : `salve.py --submit --winners 3 --fakes 2` (= 5 annonces/compte, mix 3 winners + 2 fakes). Prérequis : Brave déjà lancé en CDP 9220 (`launch_brave_cdp.bat`). Logue dans `salve_auto.log`. → c'est **la commande de référence** pour une salve.
+
+### ✅ Publication réelle du jour — 15/15 annonces, 0 échec
+- Lancé `salve.py --submit --winners 3 --fakes 2` (défaut nina/lena/orane). **Les 5 comptes étaient ouverts/connectés** dans Brave CDP 9220 (vérifié via `/json/list`).
+- **nina** (fr), **lena** (nl), **orane** (nl) : 3 winners IA + 2 fakes chacun, tous **« Annonce publiée (redirection confirmée) »**. Fakes consommés Produit_100→105.
+- État : **fakes 16/139 utilisés → 123 frais restants** ; `salves_run` = 14.
+- Note Gemini : 1 image (profil winner nina) refusée « politique de sécurité » au 1er essai → **succès au retry** (mécanisme essai 1/3 OK). Sans impact.
+
+### ⚙️ Prérequis / rappels pour relancer une salve
+1. **Brave en CDP 9220** avec une fenêtre/onglet Vinted **connecté par compte** (cf §7 PIPELINE_IA : une seule instance Brave, tous les profils dedans — 6 Go RAM, ne PAS lancer 5 instances). Mapping : emma=Profile 1 · Yazz=Profile 2 · nina=Profile 4 · lena=Profile 5 · orane=Profile 6.
+2. Toujours faire un **`--dry-run`** d'abord pour voir la pioche (il ne persiste rien).
+3. `salve.py --submit` = publication RÉELLE et difficilement réversible (15 annonces en ligne) → confirmer avant.
+4. Réglages publisher en dur (`vinted_publisher.py`, cf §4 PIPELINE_IA) : marque « Vintage chic », état « Très bon état », colis « Petit », ordre photos selfie→profil→cintre. Prix piloté par `suggest_price`/override.
+
+### ℹ️ Statut routine vs §15
+- Le **ban temporaire lena/nina** (§15, 21/06) est **levé** : les deux publient sans souci (validé 24-25/06 + aujourd'hui).
+- Reste à faire si on veut industrialiser : brancher la **tâche planifiée Windows** (2 salves/jour matin + ~6h après) sur `run_salve_auto.bat`, et à terme migrer l'état `routine_state.json` vers le manager.
+
+---
+
+## 18. Session 2026-06-26 — Offres : accepter/refuser VALIDÉ en réel + codes statut + filtre inbox ✅
+
+### ⚡ Codes statut des offres Vinted (durement acquis — CRUCIAL)
+L'entité message d'une **offre formelle** est `entity_type === "offer_request_message"`. Son `status` est **NUMÉRIQUE** (pas une string) :
+
+| `status` | Sens | `status_title` (FR) |
+|---|---|---|
+| **`10`** | **En attente** (actionnable) | « En attente » |
+| `20` | Acceptée | « - Offre acceptée » |
+| `30` | Refusée | « Refusée » |
+| `40` | Annulée | « Annulée » |
+
+Pièges confirmés sur données réelles (compte nina/emma, 2026-06-26) :
+- ⚠️ `current: true` **même** sur une offre déjà acceptée/refusée/annulée → `current` n'indique **PAS** « en attente ». Seul `status === 10` le fait.
+- ⚠️ L'entité `offer_request_message` **n'a pas de champ `id`** : l'identifiant d'offre est **`offer_request_id`**, et le `transaction_id` est aussi porté par l'entité (pas seulement par `conv.transaction`).
+- `offer_message` (autre type) = bulles de **négociation** : **pas de `status`**, juste `current` + `user_id`. NON actionnable via accept/reject (pas d'`offer_request_id`). `user_id === botId` ⇒ c'est NOTRE proposition.
+
+### 🐛 Bug corrigé (`background.js`) — pourquoi « Accepter l'offre » n'apparaissait jamais
+La détection cherchait `status === "pending"` (string) + heuristique `current && !status_title` → **jamais** vraie pour une offre formelle (status numérique, `status_title` toujours rempli). Et `findPendingOfferRequestId` lisait `ent.id` (inexistant).
+**Fix** : détection sur `Number(status) === 10` + émetteur ≠ bot ; `findPendingOfferRequestId` renvoie `{ offerRequestId: ent.offer_request_id, transactionId: ent.transaction_id }` ; ACCEPT/REJECT prend le `transaction_id` du fil sinon de l'offre. ✅ **Accepter validé en réel** (offre acceptée avec succès depuis le Manager). Refuser = même mécanique (verbe `reject`).
+
+### ✅ Filtre par état d'offre dans l'inbox
+- L'extension calcule désormais un **`offerStatus`** par conversation : `PENDING` (offre reçue) · `PROPOSAL_SENT` (notre proposition en attente) · `ACCEPTED` · `REFUSED` · `CANCELLED` · `null`. Reflète l'**offre formelle la plus récente** (sinon la dernière bulle `offer_message` active). `hasOffer` reste = offre reçue actionnable.
+- Colonne `offerStatus` **déjà existante** sur `VintedConversation` → **aucune migration**. Route sync inchangée (stockait déjà `offerStatus`).
+- `inbox/page.tsx` : rangée de **chips de filtre** (Toutes / Offre reçue / Proposition envoyée / Acceptée / Refusée / Annulée / Sans offre) sous la recherche, combinée au filtre par compte.
+
+### Déploiement
+- `inbox/page.tsx` → **Vercel** (`vercel --prod`). `background.js` → **recharger l'extension** + une synchro pour recalculer `offerStatus` sur les conversations existantes (les anciennes valeurs restent jusqu'au prochain sync).

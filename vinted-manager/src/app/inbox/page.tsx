@@ -30,6 +30,17 @@ const ACCOUNT_COLORS: Record<string, { bg: string, text: string, border: string,
   dressingdantan: { bg: "bg-orange-500/10", text: "text-orange-400", border: "border-orange-500/20", glow: "shadow-[0_0_8px_rgba(249,115,22,0.2)]" },
 }
 
+// Filtres par état d'offre (offerStatus envoyé par l'extension)
+const OFFER_FILTERS: { key: string, label: string, dot: string }[] = [
+  { key: "ALL", label: "Toutes", dot: "" },
+  { key: "PENDING", label: "Offre reçue", dot: "bg-emerald-400" },
+  { key: "PROPOSAL_SENT", label: "Proposition envoyée", dot: "bg-amber-400" },
+  { key: "ACCEPTED", label: "Acceptée", dot: "bg-sky-400" },
+  { key: "REFUSED", label: "Refusée", dot: "bg-rose-400" },
+  { key: "CANCELLED", label: "Annulée", dot: "bg-zinc-500" },
+  { key: "NONE", label: "Sans offre", dot: "bg-zinc-700" },
+]
+
 const getAccountStyle = (name: string) => {
   const cleanName = name.toLowerCase()
   if (ACCOUNT_COLORS[cleanName]) return ACCOUNT_COLORS[cleanName]
@@ -46,6 +57,7 @@ export default function InboxPage() {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedConvId, setSelectedConvId] = useState<string | null>(null)
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>("ALL")
+  const [offerFilter, setOfferFilter] = useState<string>("ALL")
   const [mobileActiveView, setMobileActiveView] = useState<"list" | "chat">("list")
   
   // Formulaires de réponse et de contre-offre
@@ -93,10 +105,12 @@ export default function InboxPage() {
         (c.lastMessage || '').toLowerCase().includes(searchTerm.toLowerCase())
       
       const matchAccount = selectedAccountFilter === "ALL" || c.botAccount.name === selectedAccountFilter
-      
-      return matchSearch && matchAccount
+
+      const matchOffer = offerFilter === "ALL" || (c.offerStatus || "NONE") === offerFilter
+
+      return matchSearch && matchAccount && matchOffer
     })
-  }, [conversations, searchTerm, selectedAccountFilter])
+  }, [conversations, searchTerm, selectedAccountFilter, offerFilter])
 
   // 👤 Liste des comptes présents pour les onglets dynamiques
   const availableAccounts = useMemo(() => {
@@ -277,6 +291,28 @@ export default function InboxPage() {
               />
               <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
             </div>
+          </div>
+
+          {/* Filtres par état d'offre */}
+          <div className="px-4 py-2.5 flex items-center gap-1.5 overflow-x-auto no-scrollbar border-b border-zinc-800/40">
+            {OFFER_FILTERS.map(f => {
+              const isActive = offerFilter === f.key
+              return (
+                <button
+                  key={f.key}
+                  onClick={() => setOfferFilter(f.key)}
+                  className={cn(
+                    "px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-all whitespace-nowrap flex items-center gap-1.5 cursor-pointer",
+                    isActive
+                      ? "bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
+                      : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/40 border border-transparent"
+                  )}
+                >
+                  {f.dot && <span className={cn("w-1.5 h-1.5 rounded-full", f.dot)} />}
+                  {f.label}
+                </button>
+              )
+            })}
           </div>
 
           {/* Threads Container */}
