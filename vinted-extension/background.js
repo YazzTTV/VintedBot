@@ -2681,38 +2681,31 @@ const cachedTime = cache[idStr];
                                 };
                             });
 
-                            // Détecter une proposition d'offre en cours
+                            // Détecter une offre FORMELLE en attente (acceptable/refusable).
+                            // Statuts Vinted (offer_request_message) : 10=En attente, 20=Acceptée, 30=Refusée, 40=Annulée.
+                            // Les offer_message (sans status) sont des bulles de négociation, NON actionnables
+                            // via l'endpoint accept/reject -> on ne les compte pas comme "offre reçue".
                             let hasOffer = false;
                             let offerPrice = null;
                             let offerStatus = null;
 
-                            // Stratégie A : Parcourir les messages type offre (avec support des nouveaux types)
+                            // Stratégie A : offre formelle en attente émise par l'acheteur (la PLUS récente l'emporte)
                             for (const m of details.messages || []) {
-                                if ((m.entity_type === "OfferRequest" || m.entity_type === "Offer" || m.entity_type === "offer_request_message" || m.entity_type === "offer_message") && m.entity) {
-                                    const ent = m.entity;
-                                    
-                                    // Si l'offre est explicitement fermée ou expirée
-                                    if (ent.current === false) continue;
-                                    
-                                    // Détecter si l'état de l'offre est en suspens
-                                    const isPending = ent.status === "pending" || ent.state === "pending" || (ent.current === true && !ent.status_title);
-                                    
-                                    if (isPending) {
-                                        // N'enregistrer comme offre "reçue" dans le cockpit
-                                        // que si l'émetteur de l'offre n'est pas le bot (donc c'est l'acheteur !)
-                                        if (String(ent.user_id) !== String(botId)) {
-                                            hasOffer = true;
-                                            offerPrice = ent.price ? parseFloat(ent.price.amount || ent.price) : null;
-                                            offerStatus = "PENDING";
-                                        }
-                                    }
-                                }
+                                if (!(m.entity_type === "offer_request_message" || m.entity_type === "OfferRequest" || m.entity_type === "Offer") || !m.entity) continue;
+                                const ent = m.entity;
+                                if (ent.current === false) continue;                 // offre close
+                                const isPending = Number(ent.status) === 10 || ent.status === "pending" || ent.state === "pending";
+                                if (!isPending) continue;                            // 10 = En attente uniquement
+                                if (String(ent.user_id) === String(botId)) continue; // doit venir de l'acheteur
+                                hasOffer = true;
+                                offerPrice = ent.price ? parseFloat(ent.price.amount || ent.price) : null;
+                                offerStatus = "PENDING";
                             }
 
-                            // Stratégie B : Vérifier la transaction parente
-                            if (details.transaction && details.transaction.offer) {
+                            // Stratégie B : offre portée par la transaction parente
+                            if (!hasOffer && details.transaction && details.transaction.offer) {
                                 const off = details.transaction.offer;
-                                if (off.status === "pending" || off.state === "pending") {
+                                if (off.status === "pending" || off.state === "pending" || Number(off.status) === 10) {
                                     hasOffer = true;
                                     offerPrice = off.price ? parseFloat(off.price.amount || off.price) : null;
                                     offerStatus = "PENDING";
@@ -3447,22 +3440,30 @@ async function executeBotAction(tabId, action) {
 
             // Détection de l'offre en attente — MÊME logique que la sync inbox (cf §6 / syncVintedInboxToManager)
             // pour éviter l'incohérence "le banner s'affiche mais Accepter/Refuser ne trouve pas l'offre".
-            const OFFER_ENTITY_TYPES = ["OfferRequest", "Offer", "offer_request_message", "offer_message"];
+            // Types d'offre FORMELLE (actionnable via offer_requests/accept|reject).
+            // Statuts : 10=En attente, 20=Acceptée, 30=Refusée, 40=Annulée.
+            const OFFER_ENTITY_TYPES = ["offer_request_message", "OfferRequest", "Offer"];
+            // Renvoie { offerRequestId, transactionId } de la PLUS RÉCENTE offre en attente, ou null.
             const findPendingOfferRequestId = (conv) => {
-                let id = null;
+                let res = null;
                 for (const m of (conv.messages || [])) {
                     if (!m.entity || !OFFER_ENTITY_TYPES.includes(m.entity_type)) continue;
                     const ent = m.entity;
                     if (ent.current === false) continue; // offre fermée/expirée
-                    const isPending = ent.status === "pending" || ent.state === "pending" || (ent.current === true && !ent.status_title);
-                    if (isPending && ent.id) id = ent.id; // garder la PLUS RÉCENTE offre en attente
+                    const isPending = Number(ent.status) === 10 || ent.status === "pending" || ent.state === "pending";
+                    if (!isPending) continue;
+                    // L'entité offer_request_message porte offer_request_id (PAS de champ id).
+                    const orid = (ent.offer_request_id != null) ? ent.offer_request_id : ent.id;
+                    if (orid) res = { offerRequestId: orid, transactionId: (ent.transaction_id != null) ? ent.transaction_id : null };
                 }
                 // Fallback : offre portée directement par la transaction (Stratégie B de la sync)
-                if (!id && conv.transaction && conv.transaction.offer && conv.transaction.offer.id) {
+                if (!res && conv.transaction && conv.transaction.offer && conv.transaction.offer.id) {
                     const off = conv.transaction.offer;
-                    if (off.status === "pending" || off.state === "pending" || off.current === true) id = off.id;
+                    if (off.status === "pending" || off.state === "pending" || Number(off.status) === 10) {
+                        res = { offerRequestId: off.id, transactionId: conv.transaction.id };
+                    }
                 }
-                return id;
+                return res;
             };
 
             try {
@@ -3502,8 +3503,12 @@ async function executeBotAction(tabId, action) {
                     const cData = await convRes.json();
                     const conv = cData.conversation || cData;
 
-                    const transactionId = conv.transaction ? conv.transaction.id : null;
-                    const offerRequestId = findPendingOfferRequestId(conv);
+                    const pendingOffer = findPendingOfferRequestId(conv);
+                    const offerRequestId = pendingOffer ? pendingOffer.offerRequestId : null;
+                    // transaction_id : priorité à la transaction du fil, sinon celui porté par l'offre.
+                    const transactionId = (conv.transaction && conv.transaction.id)
+                        ? conv.transaction.id
+                        : (pendingOffer ? pendingOffer.transactionId : null);
 
                     if (!transactionId || !offerRequestId) {
                         throw new Error("Aucune transaction ou offre en cours détectée sur ce fil.");
