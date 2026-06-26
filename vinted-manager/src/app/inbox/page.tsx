@@ -41,6 +41,15 @@ const OFFER_FILTERS: { key: string, label: string, dot: string }[] = [
   { key: "NONE", label: "Sans offre", dot: "bg-zinc-700" },
 ]
 
+// Badge d'état d'offre affiché sur chaque conversation (piloté par offerStatus)
+const OFFER_BADGES: Record<string, { label: string, cls: string, withPrice: boolean, pulse?: boolean }> = {
+  PENDING:       { label: "Offre reçue",         cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20", withPrice: true, pulse: true },
+  PROPOSAL_SENT: { label: "Proposition envoyée", cls: "bg-amber-500/15 text-amber-400 border-amber-500/20",       withPrice: true },
+  ACCEPTED:      { label: "Acceptée",            cls: "bg-sky-500/15 text-sky-400 border-sky-500/20",             withPrice: true },
+  REFUSED:       { label: "Refusée",             cls: "bg-rose-500/15 text-rose-400 border-rose-500/20",          withPrice: false },
+  CANCELLED:     { label: "Annulée",             cls: "bg-zinc-700/30 text-zinc-400 border-zinc-600/30",          withPrice: false },
+}
+
 const getAccountStyle = (name: string) => {
   const cleanName = name.toLowerCase()
   if (ACCOUNT_COLORS[cleanName]) return ACCOUNT_COLORS[cleanName]
@@ -389,12 +398,21 @@ export default function InboxPage() {
                         {conv.lastMessage || "Aucun message"}
                       </p>
 
-                      {/* Badge OFFRE EN COURS 🔥 */}
-                      {conv.hasOffer && (
-                        <div className="mt-2 inline-flex items-center gap-1 bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded font-black text-[9px] shadow-[0_0_8px_rgba(16,185,129,0.15)] animate-pulse">
-                          <DollarSign className="w-2.5 h-2.5" /> PROPOSITION : {Number(conv.offerPrice).toFixed(2)}€
-                        </div>
-                      )}
+                      {/* Badge d'état d'offre (piloté par offerStatus) */}
+                      {(() => {
+                        const badge = OFFER_BADGES[conv.offerStatus as string]
+                        if (!badge) return null
+                        const price = (badge.withPrice && conv.offerPrice != null) ? ` : ${Number(conv.offerPrice).toFixed(2)}€` : ""
+                        return (
+                          <div className={cn(
+                            "mt-2 inline-flex items-center gap-1 border px-2 py-0.5 rounded font-black text-[9px]",
+                            badge.cls,
+                            badge.pulse && "animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.15)]"
+                          )}>
+                            <DollarSign className="w-2.5 h-2.5" /> {badge.label.toUpperCase()}{price}
+                          </div>
+                        )
+                      })()}
                     </div>
                   </button>
                 )
