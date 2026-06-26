@@ -535,7 +535,7 @@ export default function DressingPage() {
           </div>
           
           <div className="flex items-center justify-between gap-4">
-            {(activeTab === 'ACTIF' || activeTab === 'VENDU') && filteredItems.length > 0 ? (
+            {(activeTab === 'ACTIF' || activeTab === 'VENDU' || activeTab === 'MASQUE') && filteredItems.length > 0 ? (
               <button
                 onClick={toggleSelectAll}
                 className="text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors flex items-center gap-1.5"
@@ -624,8 +624,8 @@ export default function DressingPage() {
                     <div className="absolute inset-0 bg-emerald-500/20 border-2 border-emerald-500/50 z-0" />
                   )}
 
-                  {/* Selection checkbox (onglets En ligne + Vendu) */}
-                  {(activeTab === 'ACTIF' || activeTab === 'VENDU') && (
+                  {/* Selection checkbox (onglets En ligne + Vendu + Masqués) */}
+                  {(activeTab === 'ACTIF' || activeTab === 'VENDU' || activeTab === 'MASQUE') && (
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
                       className={cn(
@@ -654,7 +654,7 @@ export default function DressingPage() {
 
                   {/* Hover Buttons */}
                   <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col justify-center gap-2 p-4 z-10">
-                    {(activeTab === 'ACTIF' || activeTab === 'VENDU') ? (
+                    {(activeTab === 'ACTIF' || activeTab === 'VENDU' || activeTab === 'MASQUE') ? (
                       <>
                         <button
                           onClick={(e) => { e.stopPropagation(); setSelectedItems(new Set([item.id])); setShowRepostModal(true); }}
