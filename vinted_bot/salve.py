@@ -162,10 +162,19 @@ def prepare_fake(account: str, cfg, fake: dict, out_dir: str) -> bool:
 
 # ---------- Publication (onglet Brave) ----------
 
-def mark_tab(account: str) -> bool:
-    """Place l'onglet Vinted du compte sur ?bot_profile=<account> (repris de publier_tous)."""
+def mark_tab(account: str):
+    """Place l'onglet Vinted du compte sur ?bot_profile=<account> (repris de publier_tous).
+
+    Renvoie un tuple (status, detail) :
+      ("OK", login)              -> onglet trouvé + connecté, navigation effectuée.
+      ("LOGGED_OUT", urls)       -> aucun onglet ne correspond au compte voulu, MAIS au
+                                    moins un onglet Vinted a renvoyé un 401 = session
+                                    déconnectée (garde-fou : à reconnecter avant de relancer).
+      ("NOT_FOUND", None)        -> aucun onglet Vinted du compte (ni connecté ni 401).
+    """
     from playwright.sync_api import sync_playwright
     want = USERNAME[account].lower()
+    logged_out_urls = []  # onglets Vinted dont la session a expiré (HTTP 401)
     p = sync_playwright().start()
     try:
         b = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}", timeout=60000)
@@ -175,20 +184,29 @@ def mark_tab(account: str) -> bool:
                 continue
             try:
                 who = pg.evaluate("""async () => {
-                    const r = await fetch('/api/v2/users/current', {headers:{'Accept':'application/json'}});
-                    if(!r.ok) return null; const j = await r.json();
-                    return j.user ? j.user.login : null;
+                    try {
+                        const r = await fetch('/api/v2/users/current', {headers:{'Accept':'application/json'}});
+                        if(!r.ok) return 'HTTP_'+r.status;
+                        const j = await r.json();
+                        return j.user ? j.user.login : 'NO_USER';
+                    } catch(e) { return 'ERR'; }
                 }""")
             except Exception:
-                who = None
-            if who and who.lower() == want:
+                who = "ERR"
+            # Session expirée : on garde l'URL pour aider à identifier le compte à reconnecter.
+            if who == "HTTP_401":
+                logged_out_urls.append(pg.url)
+                continue
+            if isinstance(who, str) and who.lower() == want:
                 pg.goto(f"https://www.vinted.fr/?bot_profile={account.lower()}",
                         timeout=45000, wait_until="domcontentloaded")
                 time.sleep(1)
                 b.close()
-                return True
+                return ("OK", who)
         b.close()
-        return False
+        if logged_out_urls:
+            return ("LOGGED_OUT", ", ".join(logged_out_urls))
+        return ("NOT_FOUND", None)
     finally:
         p.stop()
 
@@ -289,8 +307,13 @@ def run_salve(accounts, n_winners, n_fakes, dry_run, generate_only, submit, use_
         # Publication
         locked = manager_lock(acc) if use_lock else False
         try:
-            if not mark_tab(acc):
-                print(f"  [WARN] onglet {acc} ({USERNAME[acc]}) introuvable -> compte non ouvert/connecté ? Salve sautée.")
+            status, detail = mark_tab(acc)
+            if status == "LOGGED_OUT":
+                print(f"  [DÉCONNECTÉ] compte {acc} ({USERNAME[acc]}) : session Vinted expirée (HTTP 401). "
+                      f"Reconnecte-toi dans l'onglet Brave puis relance (--accounts {acc}). Onglet(s) 401 : {detail}")
+                continue
+            if status != "OK":
+                print(f"  [WARN] onglet {acc} ({USERNAME[acc]}) introuvable -> compte non ouvert ? Salve sautée.")
                 continue
             for j, (kind, item, d) in enumerate(prepared):
                 print(f"  [PUBLISH {j+1}/{len(prepared)}] {kind} {os.path.basename(d)}")
