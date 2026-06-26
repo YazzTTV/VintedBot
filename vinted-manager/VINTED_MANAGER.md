@@ -405,3 +405,22 @@ La détection cherchait `status === "pending"` (string) + heuristique `current &
 
 ### Déploiement
 - `inbox/page.tsx` → **Vercel** (`vercel --prod`). `background.js` → **recharger l'extension** + une synchro pour recalculer `offerStatus` sur les conversations existantes (les anciennes valeurs restent jusqu'au prochain sync).
+
+---
+
+## 19. Nouveau compte « ethan » — EN WARM-UP (à intégrer ~2026-07-03)
+
+Compte Vinted **ethan** ajouté le 2026-06-26. **En warm-up ~1 semaine** à la demande de l'utilisateur → **NE PAS l'intégrer à l'automatisation tant que le warm-up n'est pas fini** (rien n'a été modifié côté code/config pour l'instant).
+
+Infos déjà découvertes (pour gagner du temps à l'intégration) :
+- Brave **Profile 9** (libellé « Ethan »).
+- Login Vinted **ethan34980** (member 38805377), compte vinted.fr.
+
+Checklist d'intégration (à faire vers le 2026-07-03) :
+1. `Accounts/ethan/settings.json` : `brave_profile="Profile 9"`, `cdp_port=9220`, `size="S"`, `niche="garment"`, **langue à confirmer (fr/nl)**.
+2. `vinted_bot/salve.py` : `ethan → "ethan34980"` dans `USERNAME`, ajout à `ALL_ACCOUNTS` (et `AUTOMATION_ACCOUNTS` seulement si salve auto voulue).
+3. `vinted_bot/launch_brave_cdp.bat` : lancer aussi `--profile-directory="Profile 9"`.
+4. `vinted-manager/src/app/inbox/page.tsx` : couleur dans `ACCOUNT_COLORS`.
+5. Compléter le mapping comptes→profils ci-dessous.
+
+Mapping profils Brave : emma=Profile 1 · Yazz=Profile 2 · nina=Profile 4 · lena=Profile 5 · orane=Profile 6 · **ethan=Profile 9 (warm-up)** (Profile 3 libre).
