@@ -32,17 +32,23 @@ export default function Dashboard() {
   const [stats, setStats] = React.useState<any>(null)
   const [loading, setLoading] = React.useState(true)
   const [period, setPeriod] = React.useState('global')
+  const [account, setAccount] = React.useState('all')
 
   React.useEffect(() => {
     setLoading(true)
-    fetch(`/api/stats/dashboard?period=${period}`)
+    fetch(`/api/stats/dashboard?period=${period}&account=${account}`)
       .then(r => r.json())
       .then(d => {
         if(d.success) setStats(d.data)
         setLoading(false)
       })
       .catch(() => setLoading(false))
-  }, [period])
+  }, [period, account])
+
+  // Comptes visibles dans la grille flotte (1 seul si filtré, sinon tous)
+  const visibleBots = (stats?.bots || []).filter(
+    (b: any) => account === 'all' || b.id === account
+  )
 
   const displayChart = stats?.chartData?.length > 0 ? stats.chartData : [
     { date: 'Lun', "CA (€)": 0, "Bénéfice (€)": 0 },
@@ -66,7 +72,18 @@ export default function Dashboard() {
           <p className="text-zinc-400 mt-1 text-sm font-medium flex items-center gap-2">Aperçu général de votre activité de revente en temps réel.</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
-          <select 
+          <select
+            value={account}
+            onChange={(e) => setAccount(e.target.value)}
+            className="bg-zinc-900 border border-zinc-800 text-white text-xs sm:text-sm font-semibold px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors duration-200 shadow-md outline-none focus:border-emerald-500/50 cursor-pointer capitalize"
+          >
+            <option value="all">Tous les comptes</option>
+            {stats?.bots?.map((b: any) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+
+          <select
             value={period}
             onChange={(e) => setPeriod(e.target.value)}
             className="bg-zinc-900 border border-zinc-800 text-white text-xs sm:text-sm font-semibold px-3 py-2 rounded-lg hover:bg-zinc-800 transition-colors duration-200 shadow-md outline-none focus:border-emerald-500/50 cursor-pointer"
@@ -101,13 +118,15 @@ export default function Dashboard() {
           icon={Euro}
           positive={true}
         />
-        <KPICard 
-          title="Dépenses Commandes" 
-          value={loading ? "..." : `${Number(stats?.totalExpenses || 0).toFixed(2)} €`}
-          trend="Total des achats" 
-          icon={CreditCard}
-          positive={false}
-        />
+        {!stats?.accountFiltered && (
+          <KPICard
+            title="Dépenses Commandes"
+            value={loading ? "..." : `${Number(stats?.totalExpenses || 0).toFixed(2)} €`}
+            trend="Total des achats"
+            icon={CreditCard}
+            positive={false}
+          />
+        )}
         <KPICard 
           title="Bénéfice Net" 
           value={loading ? "..." : `${Number(stats?.beneficeTotal || 0).toFixed(2)} €`}
@@ -267,7 +286,7 @@ export default function Dashboard() {
               <Server className="w-5 h-5 text-emerald-400" />
               Surveillance Opérationnelle de la Flotte
             </h2>
-            <p className="text-xs text-zinc-500 mt-0.5 font-medium">État des 5 comptes bots et finances individuelles synchronisés par extension Chrome.</p>
+            <p className="text-xs text-zinc-500 mt-0.5 font-medium">{account === 'all' ? `État des ${visibleBots.length || ''} comptes bots et finances individuelles synchronisés par extension Chrome.`.replace('  ', ' ') : 'Finances du compte sélectionné synchronisées par extension Chrome.'}</p>
           </div>
           
           <div className="flex items-center gap-2 bg-zinc-900/50 border border-zinc-800 px-3 py-1.5 rounded-lg self-start">
@@ -285,9 +304,9 @@ export default function Dashboard() {
               <div key={n} className="h-40 bg-zinc-900/30 border border-zinc-800/40 rounded-xl animate-pulse"></div>
             ))}
           </div>
-        ) : stats?.bots?.length > 0 ? (
+        ) : visibleBots.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-            {stats.bots.map((bot: any) => {
+            {visibleBots.map((bot: any) => {
               // Déterminer si le bot est considéré "ONLINE" (dernière synchro < 20 min)
               const isOnline = bot.lastSync ? (new Date().getTime() - new Date(bot.lastSync).getTime() < 20 * 60 * 1000) : false;
               

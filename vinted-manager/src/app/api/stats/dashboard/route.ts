@@ -6,36 +6,35 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const period = searchParams.get('period') || 'global'
 
-    let dateFilterVentes: any = undefined
-    let dateFilterCommandes: any = undefined
+    // Filtre compte (botAccountId). "all"/absent => tous les comptes.
+    const accountParam = searchParams.get('account')
+    const accountId = accountParam && accountParam !== 'all' ? accountParam : null
+    const venteAccountWhere: any = accountId ? { botAccountId: accountId } : {}
+
+    // Plancher d'activité : rien avant le 1er mai 2026 (mai = index 4).
+    // Élimine les données de test antérieures, y compris en vue "Global".
+    const BUSINESS_START = new Date(2026, 4, 1)
 
     const now = new Date()
-    if (period !== 'global') {
-      if (period === 'today') {
-        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-        dateFilterVentes = { gte: start }
-        dateFilterCommandes = { gte: start }
-      } else if (period === '15d') {
-        const start = new Date(now)
-        start.setDate(start.getDate() - 15)
-        dateFilterVentes = { gte: start }
-        dateFilterCommandes = { gte: start }
-      } else if (period === '30d') {
-        const start = new Date(now)
-        start.setDate(start.getDate() - 30)
-        dateFilterVentes = { gte: start }
-        dateFilterCommandes = { gte: start }
-      } else if (period === '90d') {
-        const start = new Date(now)
-        start.setDate(start.getDate() - 90)
-        dateFilterVentes = { gte: start }
-        dateFilterCommandes = { gte: start }
-      } else if (period === 'month') {
-        const start = new Date(now.getFullYear(), now.getMonth(), 1)
-        dateFilterVentes = { gte: start }
-        dateFilterCommandes = { gte: start }
-      }
+    let startDate: Date
+    if (period === 'today') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    } else if (period === '15d') {
+      startDate = new Date(now); startDate.setDate(startDate.getDate() - 15)
+    } else if (period === '30d') {
+      startDate = new Date(now); startDate.setDate(startDate.getDate() - 30)
+    } else if (period === '90d') {
+      startDate = new Date(now); startDate.setDate(startDate.getDate() - 90)
+    } else if (period === 'month') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+    } else {
+      startDate = new Date(BUSINESS_START) // global => depuis le début d'activité
     }
+    // Plancher d'activité appliqué à TOUTES les périodes.
+    if (startDate < BUSINESS_START) startDate = new Date(BUSINESS_START)
+
+    const dateFilterVentes: any = { gte: startDate }
+    const dateFilterCommandes: any = { gte: startDate }
 
     // Fenêtre du graphique dynamique selon la période
     let chartDays = 6
@@ -44,16 +43,18 @@ export async function GET(request: Request) {
     else if (period === '90d') chartDays = 89
     else if (period === 'month') chartDays = Math.max(0, now.getDate() - 1)
 
-    const chartStartDate = new Date(now)
+    let chartStartDate = new Date(now)
     chartStartDate.setDate(chartStartDate.getDate() - chartDays)
     chartStartDate.setHours(0, 0, 0, 0)
+    if (chartStartDate < BUSINESS_START) chartStartDate = new Date(BUSINESS_START)
 
     // Parallel metrics fetching for performance
     const [aggregateSales, aggregateExpenses, stockCount, chartVentes, realAlerts, botStats, botList, commandesAFaireData] = await Promise.all([
       // 1. Global Sales Statistics (hors annulations)
       prisma.vente.aggregate({
         where: {
-          ...(dateFilterVentes ? { dateVente: dateFilterVentes } : {}),
+          dateVente: dateFilterVentes,
+          ...venteAccountWhere,
           statut: { not: 'ANNULEE' }
         },
         _sum: {
@@ -66,7 +67,7 @@ export async function GET(request: Request) {
       }),
       // 2. Global Supplier Expenses (prixTotal of all orders)
       prisma.commandeFournisseur.aggregate({
-        where: dateFilterCommandes ? { dateCommande: dateFilterCommandes } : undefined,
+        where: { dateCommande: dateFilterCommandes },
         _sum: {
           prixTotal: true
         }
@@ -77,7 +78,7 @@ export async function GET(request: Request) {
       }),
       // 4. Dynamic time series data for the UI charts (hors annulations)
       prisma.vente.findMany({
-        where: { dateVente: { gte: chartStartDate }, statut: { not: 'ANNULEE' } },
+        where: { dateVente: { gte: chartStartDate }, ...venteAccountWhere, statut: { not: 'ANNULEE' } },
         orderBy: { dateVente: 'desc' },
         select: {
           dateVente: true,
@@ -87,13 +88,14 @@ export async function GET(request: Request) {
       }),
       // 5. Fetch real shipping alerts (Pending sales)
       prisma.vente.findMany({
-        where: { statut: 'EN_ATTENTE' },
+        where: { statut: 'EN_ATTENTE', ...venteAccountWhere },
         take: 5, // Just need top urgent ones for dash
         orderBy: { dateLimiteExpedition: 'asc' },
         include: { article: true }
       }),
       // 6. Aggregated Real Bot Balances (Supabase real sync)
       prisma.botAccount.aggregate({
+        where: accountId ? { id: accountId } : undefined,
         _sum: {
           balancePending: true,
           balanceAvailable: true
@@ -105,7 +107,7 @@ export async function GET(request: Request) {
       }),
       // 8. Commandes à faire
       prisma.vente.findMany({
-        where: { statut: 'COMMANDE_A_FAIRE' },
+        where: { statut: 'COMMANDE_A_FAIRE', ...venteAccountWhere },
         include: { article: true },
         orderBy: { dateVente: 'desc' }
       })
@@ -197,6 +199,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       success: true,
       data: {
+        accountFiltered: !!accountId,
         commandesAFaire,
         chartPeriodDays: chartDays + 1,
         caTotal: Number(aggregateSales._sum.prixVente || 0),
