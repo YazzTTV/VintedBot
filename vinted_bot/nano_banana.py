@@ -286,7 +286,11 @@ def build_selfie_prompt(prompt_anglais: str) -> str:
         "Garde l'image 1 quasiment telle quelle : exactement le meme decor, la meme piece, "
         "le meme visage cache par le telephone, les memes cheveux, le meme cadrage et le meme eclairage. "
         f"Tu peux LEGEREMENT varier UNIQUEMENT la position du bras/de la main libre (celle qui ne tient "
-        f"pas le telephone) : {hand}. Ne change rien d'autre a la pose. "
+        f"pas le telephone) : {hand}. IMPORTANT : si tu repositionnes ce bras libre, DEPLACE le bras qui "
+        f"existe deja - n'en ajoute JAMAIS un nouveau, et efface completement son ancienne position (aucun "
+        f"bras fantome ne doit rester le long du corps). La fille a EXACTEMENT deux bras et deux mains : "
+        f"un bras tient le telephone, l'autre est le bras libre. Aucun bras, coude, avant-bras ou main "
+        f"supplementaire ne doit apparaitre. Ne change rien d'autre a la pose. "
         "Ne change que la tenue et cette main libre. "
         "La robe doit etre identique a celle de l'image 2 : meme couleur, meme col, memes manches, "
         "meme taille, memes volants, meme longueur et meme coupe. Ne la redessine pas. "
@@ -348,6 +352,68 @@ def _mask_product_face(product_path: str):
         return None
 
 
+# Modele de controle qualite (vision) : meme famille que l'analyse produit (processor.py).
+QA_MODEL = os.getenv("ANATOMY_QA_MODEL", "gemini-3.1-flash-lite")
+
+
+async def _passes_anatomy_qa(client, image_path, semaphore, label="selfie"):
+    """Controle qualite anatomique de l'image generee via Gemini vision.
+
+    Retourne (ok: bool, reason: str). Le pipeline ne contrôlait QUE les échecs API ;
+    une image anatomiquement fausse mais techniquement valide passait (3e bras, deux
+    bras du meme cote...). Ici on demande a un modele vision de juger.
+    Fail-open (True) si l'appel/parse echoue : on ne bloque jamais la production si le
+    verificateur lui-meme tombe (quota, reseau)."""
+    prompt = (
+        "Tu es un controleur qualite e-commerce. Observe la personne sur la photo et verifie son "
+        "anatomie. Reponds UNIQUEMENT par un JSON compact : {\"ok\": true|false, \"reason\": \"...\"}. "
+        "Mets ok=false si tu vois l'un de ces defauts : plus de deux bras ; un bras, avant-bras ou main "
+        "en trop ou fantome ; les DEUX bras du meme cote du corps (un cote sans bras) ; un membre fusionne "
+        "ou deforme ; une main au nombre de doigts anormal. Mets ok=true seulement si la personne a "
+        "EXACTEMENT deux bras (un de chaque cote) et une anatomie plausible. Sois strict sur bras et mains."
+    )
+    try:
+        img = Image.open(image_path)
+    except Exception as e:
+        print(f"[NanoBanana:{label}] [QA] image illisible ({e}) -> QA ignore.")
+        return True, "image illisible"
+    try:
+        async with semaphore:
+            resp = await client.aio.models.generate_content(model=QA_MODEL, contents=[prompt, img])
+        raw = (_extract_response_text(resp) or "").strip().strip("`")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].strip()
+        import json, re
+        m = re.search(r"\{.*\}", raw, re.DOTALL)
+        data = json.loads(m.group(0)) if m else {}
+        return bool(data.get("ok", True)), str(data.get("reason", ""))[:200]
+    except Exception as e:
+        print(f"[NanoBanana:{label}] [QA] echec verification ({e}) -> QA ignore (fail-open).")
+        return True, "qa error"
+
+
+async def _generate_selfie_candidate(client, front, product_path, output_path, semaphore, prompt):
+    """Produit UN candidat selfie (essai court image entiere, puis fallback visage masque).
+    Retourne True si une image a ete ecrite dans output_path."""
+    # 1er essai COURT (1 tentative) sur l'image entiere : si le produit n'a pas de
+    # visage genant, ca passe direct. Sinon on ne gaspille qu'un appel avant le masque.
+    if await _nano_generate(client, prompt, [front, product_path], output_path, semaphore,
+                            "selfie", max_retries=1):
+        return True
+    # Fallback : masquer le visage du produit (garde toute la robe) ; sinon rogner la tete.
+    fallback = _mask_product_face(product_path) or _crop_product_head(product_path)
+    if not fallback:
+        return False
+    print("[NanoBanana:selfie] Retry avec le visage du produit masque...")
+    try:
+        return await _nano_generate(client, prompt, [front, fallback], output_path, semaphore, "selfie")
+    finally:
+        try:
+            os.remove(fallback)
+        except OSError:
+            pass
+
+
 async def task_selfie(client, product_path, avatar_path, output_path, prompt_anglais, semaphore):
     """
     Try-on : reprend un selfie de base (tire au hasard dans le pool du compte) et
@@ -366,26 +432,24 @@ async def task_selfie(client, product_path, avatar_path, output_path, prompt_ang
         print("[NanoBanana:selfie] [ERROR] Aucun selfie de base disponible.")
         return False
 
-    prompt = build_selfie_prompt(prompt_anglais)
-
-    # 1er essai COURT (1 tentative) sur l'image entiere : si le produit n'a pas de
-    # visage genant, ca passe direct. Sinon on ne gaspille qu'un appel avant le masque.
-    if await _nano_generate(client, prompt, [front, product_path], output_path, semaphore,
-                            "selfie", max_retries=1):
-        return True
-
-    # Fallback : masquer le visage du produit (garde toute la robe) ; sinon rogner la tete.
-    fallback = _mask_product_face(product_path) or _crop_product_head(product_path)
-    if not fallback:
-        return False
-    print("[NanoBanana:selfie] Retry avec le visage du produit masque...")
-    try:
-        return await _nano_generate(client, prompt, [front, fallback], output_path, semaphore, "selfie")
-    finally:
-        try:
-            os.remove(fallback)
-        except OSError:
-            pass
+    # Boucle QA anatomie : on (re)genere puis on fait VALIDER l'image par un modele
+    # vision ; tant que l'anatomie est mauvaise (3e bras, deux bras du meme cote...),
+    # on re-tire (build_selfie_prompt re-tire la pose du bras libre a chaque essai).
+    tries = int(os.getenv("SELFIE_ANATOMY_TRIES", "4"))
+    wrote = False
+    for qa_try in range(1, tries + 1):
+        prompt = build_selfie_prompt(prompt_anglais)
+        wrote = await _generate_selfie_candidate(client, front, product_path, output_path, semaphore, prompt)
+        if not wrote:
+            return False  # echec de generation (API) : deja retente en interne
+        ok, reason = await _passes_anatomy_qa(client, output_path, semaphore)
+        if ok:
+            print(f"[NanoBanana:selfie] [QA] anatomie validee (essai {qa_try}/{tries}).")
+            return True
+        print(f"[NanoBanana:selfie] [QA] anatomie rejetee (essai {qa_try}/{tries}) : {reason} -> nouveau tirage.")
+    print(f"[NanoBanana:selfie] [QA] [WARN] anatomie NON validee apres {tries} essais — "
+          f"image conservee, a verifier manuellement.")
+    return wrote
 
 
 # NOTE IMPORTANTE : flat_lay / folded / hanger sourcent depuis le SELFIE genere
@@ -464,14 +528,28 @@ async def task_hanger(client, source_path, hanger_template_path, output_path, pr
 
 
 async def task_profile(client, selfie_path, output_path, semaphore):
-    """Vue de profil (cote), derivee du selfie de face genere (meme sujet/tenue/decor)."""
+    """Vue de profil (cote), derivee du selfie de face genere (meme sujet/tenue/decor).
+    Boucle QA anatomie : re-tire si bras anormaux (meme controle que le selfie)."""
     prompt = (
         "Fais une version de cette image sous forme de selfie dans le miroir ou le modele se montre "
         "plus de profil (vue de cote), sans qu'on voie le dos. Garde exactement la meme personne, les "
         "memes cheveux, la meme tenue (la meme robe), le meme telephone et le meme arriere-plan de la "
         "piece."
     )
-    return await _nano_generate(client, prompt, [selfie_path], output_path, semaphore, "profile")
+    tries = int(os.getenv("PROFILE_ANATOMY_TRIES", os.getenv("SELFIE_ANATOMY_TRIES", "4")))
+    wrote = False
+    for qa_try in range(1, tries + 1):
+        wrote = await _nano_generate(client, prompt, [selfie_path], output_path, semaphore, "profile")
+        if not wrote:
+            return False
+        ok, reason = await _passes_anatomy_qa(client, output_path, semaphore, label="profile")
+        if ok:
+            print(f"[NanoBanana:profile] [QA] anatomie validee (essai {qa_try}/{tries}).")
+            return True
+        print(f"[NanoBanana:profile] [QA] anatomie rejetee (essai {qa_try}/{tries}) : {reason} -> nouveau tirage.")
+    print(f"[NanoBanana:profile] [QA] [WARN] anatomie NON validee apres {tries} essais — "
+          f"image conservee, a verifier manuellement.")
+    return wrote
 
 
 async def task_selfie_hand_in_hair(client, selfie_path, output_path, semaphore):

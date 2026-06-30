@@ -1,6 +1,6 @@
 # Vinted Manager — Contexte projet (à lire en priorité)
 
-> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-20.
+> Doc de référence pour reprendre le projet rapidement. Mise à jour : 2026-06-26.
 > Répondre **toujours en français** (préférence utilisateur).
 >
 > **⚠️ Repo partagé avec un autre dev.** GitHub `https://github.com/YazzTTV/VintedBot` (branche `main`).
@@ -424,3 +424,63 @@ Checklist d'intégration (à faire vers le 2026-07-03) :
 5. Compléter le mapping comptes→profils ci-dessous.
 
 Mapping profils Brave : emma=Profile 1 · Yazz=Profile 2 · nina=Profile 4 · lena=Profile 5 · orane=Profile 6 · **ethan=Profile 9 (warm-up)** (Profile 3 libre).
+
+---
+
+## 20. Session 2026-06-26 (suite) — 2ᵉ salve du jour (nina/lena/orane) + piège crédits Gemini & fakes FAILED
+
+> Concerne le pipeline **`vinted_bot/`** (pas l'extension/manager). Exécution d'une salve réelle ; deux enseignements à retenir.
+
+### ✅ 2ᵉ salve du jour — 15/15 publiées (en 2 temps)
+- Lancé `salve.py --submit --winners 3 --fakes 2` (défaut nina/lena/orane), Brave CDP 9220 avec les 3 onglets connectés (vérifié via `/json/list`).
+- **nina** (fr) et **lena** (nl) : 5/5 chacun (3 winners IA + 2 fakes), tous « Annonce publiée (redirection confirmée) ».
+- **orane** (nl) : **0/5 au 1er passage** → bloqué par crédits Gemini épuisés (voir ci-dessous). Après rechargement des crédits par l'utilisateur, relancé en ciblé `salve.py --submit --accounts orane --winners 3 --fakes 2` → **5/5 OK**.
+- État final routine : **28/139 fakes utilisés → 111 frais**, `salves_run = 21`. Fakes consommés cette salve : Produit_111→116.
+
+### ⚠️ Piège n°1 — crédits Gemini (AI Studio) épuisés en plein run
+- Symptôme : `429 RESOURCE_EXHAUSTED — "Your prepayment credits are depleted"` sur **toutes** les analyses (`processor.py`, winners **et** fakes). Le compte tombé pile sur l'épuisement (orane) ne publie **rien** (analyse winner KO → pas d'images ; analyse fake KO → fake écarté).
+- Cause : solde prépayé du projet Google AI Studio à zéro. Recharge = **action utilisateur** sur https://ai.studio (Billing). Le dry-run **ne teste pas** Gemini (il ne fait que la pioche) → pour confirmer que les crédits sont OK, surveiller le 1er `[Processor] Prix suggéré …` du run réel (ou inversement un `RESOURCE_EXHAUSTED`).
+- **Conso Gemini par annonce** (= ce qui vide le solde) : un **winner** = 1 analyse Gemini + **4 générations d'images** (`nano_banana` : selfie, profile, hanger_step1, hanger) → poste de coût dominant ; un **fake** = 1 seul appel texte (titre/desc), pas d'image. Ordre de grandeur observé : ~0,27 €/annonce en moyenne (à confirmer sur l'onglet Usage de la console — non accessible côté code).
+
+### ⚠️ Piège n°2 — un fake en échec est « brûlé » à tort (état anti-doublon)
+- Quand l'analyse d'un fake échoue, `salve.py` le marque `assigned_to: <compte>, status: "FAILED"` dans `routine_state.json`.
+- Or `routine_state.pick_fresh_fakes` s'appuie sur `fake_is_available(state, folder)` = **`folder not in state["fakes"]`** → **tout fake présent dans l'état (PUBLISHED *comme* FAILED) n'est PLUS JAMAIS proposé.** `drop_reserved()` ne libère que les `RESERVED`, pas les `FAILED`.
+- Conséquence ici : Produit_115/116 (échec dû au quota Gemini, **pas** au fake) auraient été perdus définitivement. **Correctif manuel appliqué** : suppression de ces 2 entrées `FAILED` du JSON (backup `routine_state.json.bak_avant_liberation`) → fakes redevenus disponibles, repris par orane à la relance.
+- **À retenir / TODO éventuel** : après un run où des fakes finissent en `FAILED` pour une cause externe (quota, réseau), penser à les **libérer** (les retirer de `state["fakes"]`) avant de relancer, sinon ils sont consommés sans annonce. Amélioration possible : ne pas persister les `FAILED` causés par une erreur d'API (les traiter comme `RESERVED` / les droper en fin de run).
+
+### ⚙️ Rappels confirmés ce jour
+- Relance ciblée d'un seul compte = `--accounts orane` (n'a pas retouché nina/lena déjà complets ; leurs winners/fakes restaient correctement marqués).
+- Les **winners d'un compte échoué ne sont PAS marqués consommés** (`used_by` reste vide) — seuls les fakes posent le problème ci-dessus (single-use global vs winners par-compte).
+
+---
+
+## 21. Session 2026-06-30 — Salve scrape Shein 4 comptes + 2 bugs réglés à la racine (cascade onglet maître & bras IA)
+
+> Concerne le pipeline **`vinted_bot/`** (génération images IA + publication), PAS l'extension/manager.
+
+### ✅ Salve du jour — scrape Shein → Yazz / emma / orane / lena
+- **Scrape** : `scrape_via_yazz.py --count 3 --output-dir _scrape_winners_pm` (réutilise l'onglet Shein connecté du profil Yazz, CDP 9220). **3 robes fraîches** capturées ; l'anti-doublon (URL + empreinte dHash, cf §5 `routine_state.product_is_used`) a **écarté 3 robes déjà publiées**.
+- **Publication** : `WINNERS_DIR=_scrape_winners_pm salve.py --submit --accounts Yazz emma orane lena --winners 3 --fakes 2`. Toujours faire un **`--dry-run`** d'abord (vérifié : les 4 comptes piochent les mêmes 3 robes fraîches + 2 fakes distincts chacun).
+- **Résultat final** : les **4 comptes ont leurs 3 robes** (mannequin/fond différents par compte). Fakes : Yazz 2, emma 1, orane 1, lena 0 (voir bug brosse + single-use).
+
+### 🐛 BUG 1 — Cascade « Impossible de trouver l'onglet maitre » (réglé par contournement + brosse bannie)
+- **Mécanisme** : `vinted_publisher.find_vinted_master_page` repère l'onglet du compte via le marqueur d'URL `?bot_profile=<compte>`, **réarmé par une nav « retour accueil » en try/except APRÈS une publi réussie**. Quand une annonce **échoue à publier** (form/catégorie → `[ECHEC]`, ou exception), le marqueur n'est pas réarmé → **toutes les annonces suivantes du compte échouent** (cascade). Les annonces déjà publiées restent en ligne.
+- **Déclencheur** : **`Produit_14` = « Brosse à ongles bleue »** échoue systématiquement (catégorie/formulaire Vinted) et bloque le compte. **Bannie** dans `routine_state.json` (`fakes["Produit_14"]={status:"FAILED",assigned_to:"BANNED"}` → `fake_is_available` la rejette, plus jamais piochée).
+- **Réparation des manquantes** : nouveau **`vinted_bot/republish_failed.py`** — re-publie SANS re-générer (réutilise `_salve_out/<compte>/`). Clé : **réarme le marqueur (`salve.mark_tab`) AVANT CHAQUE annonce** → supprime la cascade. Garde-fous : `--dirs` explicites (car `_salve_out` accumule les vieilles salves → un scan aveugle re-publierait de vieux items), saute `BANNED_FAKES`, respecte le single-use des fakes. Idempotent via `published.txt`.
+- **Vérité terrain d'une salve** = présence de `published.txt` dans `_salve_out/<compte>/<item>/` (écrit par le publisher à la publi réussie). NE PAS se fier à l'ordre `wardrobe?order=relevance` (mélange bumps/dates).
+- **TODO racine (non fait)** : faire que `find_vinted_master_page` détecte le compte par l'**user loggué** (comme `mark_tab`) au lieu du seul marqueur d'URL → réglerait la cascade pour toutes les salves sans helper.
+
+### ✅ BUG 2 — Bras IA (3ᵉ bras / deux bras du même côté) — RÉGLÉ À LA RACINE
+- **Cause** : `nano_banana.task_selfie` fait un **try-on** (selfie de base + photo produit → swap tenue). Quand la **photo Shein source est elle-même un selfie chargé** (mannequin tenant téléphone **+** sac, main à la taille…), Gemini réconcilie mal les poses → **3ᵉ bras fantôme** ou **deux bras du même côté**. Le prompt interdit déjà les bras en trop, mais les modèles d'image n'obéissent pas de façon fiable au comptage. Le retry ne se déclenchait que sur **échec API**, jamais sur l'anatomie → une image fausse passait.
+- **Correctif** (`nano_banana.py`) : **boucle QA anatomie automatique**.
+  - `_passes_anatomy_qa(client, image_path, semaphore, label)` : envoie l'image à un modèle **vision** (`gemini-3.1-flash-lite`, cf `ANATOMY_QA_MODEL`) qui répond en JSON `{ok,reason}` (exactement 2 bras un de chaque côté, pas de membre en trop/fusionné, doigts normaux). **Fail-open** si le vérificateur tombe.
+  - `task_selfie` ET `task_profile` bouclent : **génère → vérifie → re-tire** si rejeté, jusqu'à `SELFIE_ANATOMY_TRIES` / `PROFILE_ANATOMY_TRIES` (défaut **4**). Garde la 1ʳᵉ image validée ; si les N essais échouent → conserve la dernière + log `[QA] [WARN] … à vérifier manuellement` (ne bloque jamais la prod).
+  - `_generate_selfie_candidate` = ancien corps de `task_selfie` (essai court image entière + fallback visage masqué) extrait en helper.
+- **Testé** : rejette bien 3ᵉ bras / deux bras même côté / doigts déformés et garde une image validée (selfie validé en ≤4 essais ; sur une robe « selfie chargé » très dure, le profil peut épuiser les 4 essais → WARN). Les sources « selfie chargé » restent les plus dures → augmenter `*_ANATOMY_TRIES` si besoin.
+- **Procédure de correction d'une annonce déjà en ligne** (utilisée pour la robe rayée d'emma) : régénérer+**vérifier au zoom** hors-ligne (`regen_emma_rayee.py` réutilise `salve.prepare_winner`, garde titre/desc/prix) → trouver l'id via le wardrobe (titre) → **supprimer** (POST `/api/v2/items/{id}/delete`, CSRF capturé via interception des requêtes `/api/`, cf `delete_emma_items.py`) → republier (`republish_failed.py --dirs`).
+
+### Fichiers ajoutés / modifiés ce jour (`vinted_bot/`)
+- **`nano_banana.py`** (modifié) : QA anatomie (`_passes_anatomy_qa`, `_generate_selfie_candidate`, boucles dans `task_selfie`/`task_profile`).
+- **`republish_failed.py`** (nouveau) : re-publication anti-cascade des manquantes.
+- **`regen_emma_rayee.py`** (nouveau) : régénération ciblée des images d'un winner (garde les textes).
+- **`routine_state.json`** : brosse `Produit_14` bannie + état des salves du jour.
