@@ -103,6 +103,11 @@ model BotAccount {
   id               String               @id @default(uuid())
   name             String               @unique
   vintedUsername   String?
+  // Colonnes legacy (non utilisées par le code) conservées pour éviter un drop
+  // destructif au `prisma db push` : elles contiennent encore des identifiants en base.
+  vintedEmail      String?
+  vintedPassword   String?
+  vintedPhone      String?
   vintedAccountId  String?              @unique
   balancePending   Decimal?             @default(0) @db.Decimal(10, 2)
   balanceAvailable Decimal?             @default(0) @db.Decimal(10, 2)
