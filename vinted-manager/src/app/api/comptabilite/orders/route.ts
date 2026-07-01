@@ -149,7 +149,10 @@ export async function POST(request: Request) {
         // ==========================================
         // DÉTECTION AUTO DES ANNULATIONS VINTED
         // ==========================================
-        const CANCELLED_STATUSES = ['cancelled', 'canceled', 'annulé', 'annulée', 'returned', 'dispute', 'refund']
+        // ⚠️ Vinted renvoie ses statuts EN FRANÇAIS ("Remboursement effectué", "Litige"…).
+        // Il faut donc les mots-clés FR (rembours*/litige/retour), sinon les remboursements
+        // restent A_EXPEDIER et gonflent le CA (bug Yazz : 390€ de remboursés comptés à tort).
+        const CANCELLED_STATUSES = ['cancelled', 'canceled', 'annulé', 'annulée', 'returned', 'dispute', 'refund', 'rembours', 'litige', 'retour']
         if (CANCELLED_STATUSES.some(s => syncedOrder.status.toLowerCase().includes(s))) {
           if (syncedOrder.articleId) {
             const linkedVente = await prisma.vente.findUnique({
