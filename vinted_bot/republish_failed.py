@@ -36,7 +36,10 @@ SALVE_OUT = os.path.join(BOT, "_salve_out")
 # Fakes bannis : échouent systématiquement à la publication (mauvaise catégorie /
 # formulaire Vinted) et bloquent le reste du compte par effet cascade.
 #   Produit_14 = "Brosse à ongles en plastique bleu" (signalé par l'utilisateur).
-BANNED_FAKES = {"Produit_14"}
+#   Produit_26 = catégorie exigeant une Taille -> "Le champ Taille doit être renseigné"
+#                (échoue sur tous les comptes + cascade). Banni le 2026-07-02.
+#   Produit_30 = catégorie exigeant une sous-catégorie -> "Choisis une sous-catégorie". Banni le 2026-07-02.
+BANNED_FAKES = {"Produit_14", "Produit_26", "Produit_30"}
 
 
 def _winner_key_from_stem(stem: str) -> str:
@@ -68,6 +71,8 @@ def pending_dirs(account: str) -> list:
 
 def republish_account(account: str, explicit_dirs: list | None = None) -> tuple:
     state = routine_state.load_state()
+    cfg = salve.get_account_config(account)  # pour l'écriture Sourcing_History (sourcing Manager)
+    winner_paths = {w["sourceKey"]: w.get("path") for w in routine_pools.list_winners()}
     # Mode explicite : on ne touche QUE les dossiers fournis (sécurité — _salve_out
     # accumule les salves passées ; un scan aveugle re-publierait de vieux items).
     if explicit_dirs:
@@ -82,12 +87,19 @@ def republish_account(account: str, explicit_dirs: list | None = None) -> tuple:
     print(f"[{account}] {len(rels)} annonce(s) à re-publier : {rels}")
 
     ok_count = 0
+    seen_keys = set()  # anti-doublon INTRA-RUN : la même robe source (key) peut avoir
+    # plusieurs dossiers (w0_.../w2_... issus de 2 salves superposées) -> ne la publier qu'UNE fois.
     for j, rel in enumerate(rels):
         d = os.path.join(SALVE_OUT, account, rel)
         is_winner = rel.startswith("w")
         kind = "WINNER" if is_winner else "FAKE"
         suffix = rel.split("_", 1)[1] if "_" in rel else rel
         key = _winner_key_from_stem(suffix) if is_winner else suffix
+
+        # Anti-doublon intra-run (winner ET fake) : même source déjà traitée ce run -> skip.
+        if key in seen_keys:
+            print(f"  [SKIP] {kind} {rel} : robe/source '{key}' déjà publiée ce run (doublon).")
+            continue
 
         # Garde-fous FAKE (single-use global) :
         if not is_winner:
@@ -118,9 +130,16 @@ def republish_account(account: str, explicit_dirs: list | None = None) -> tuple:
 
         if ok:
             ok_count += 1
+            seen_keys.add(key)  # publiée avec succès -> ne pas republier la même source ce run
             if is_winner:
                 routine_state.mark_winner_published(state, key, account)
                 routine_state.register_winner_product(state, key)
+                # Sourcing Manager : écrit la ligne Sourcing_History.md (comme salve.py).
+                try:
+                    titre_pub = salve.record_winner_sourcing(cfg, d, key, winner_paths.get(key))
+                    print(f"    [SOURCING] winner enregistré ({account}) : {titre_pub[:40]}")
+                except Exception as e:
+                    print(f"    [SOURCING] [WARN] écriture Sourcing_History échouée : {e}")
             else:
                 routine_state.mark_fake_assigned(state, key, account, status="PUBLISHED")
             routine_state.save_state(state)

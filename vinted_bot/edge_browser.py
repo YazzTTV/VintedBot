@@ -10,7 +10,7 @@ import requests
 CDP_URL       = "http://127.0.0.1:9222"
 EDGE_PATH_X86 = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
 EDGE_PATH_X64 = r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"
-USER_DATA_DIR  = r"D:\AntiGravity\02 Projects\Business Vinted\vinted_bot\Bot_Profile"
+USER_DATA_DIR  = os.environ.get("EDGE_USER_DATA_DIR", r"D:\AntiGravity\02 Projects\Business Vinted\vinted_bot\Bot_Profile")
 # AVATAR_PATH et FLOOR_TEMPLATE_PATH sont désormais gérés dynamiquement via config_manager.py
 
 
@@ -44,7 +44,7 @@ def start_edge(headless: bool = False) -> bool:
     if is_debugging_active():
         return True
     print(f"[Edge] Demarrage du navigateur Edge (mode fantome, headless={headless})...")
-    edge_path = EDGE_PATH_X86 if os.path.exists(EDGE_PATH_X86) else EDGE_PATH_X64
+    edge_path = os.environ.get("EDGE_BINARY") or (EDGE_PATH_X86 if os.path.exists(EDGE_PATH_X86) else EDGE_PATH_X64)
     if not os.path.exists(edge_path):
         print("[Edge] ERREUR : executable Edge introuvable.")
         return False

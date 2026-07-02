@@ -49,14 +49,18 @@ def get_fakes_dir() -> str | None:
 
 
 def list_winners() -> list[dict]:
-    """Retourne [{sourceKey, path}] pour chaque capture Winner."""
+    """Retourne [{sourceKey, path, purchase_price}] pour chaque capture Winner.
+
+    purchase_price = coût d'achat Shein (€) lu depuis le sidecar .price (None si absent,
+    ex: winners scrapés avant l'ajout de la capture du prix, ou via l'ancien scraper.py)."""
     wdir = get_winners_dir()
     if not wdir:
         return []
     out = []
     for f in sorted(os.listdir(wdir)):
         if f.lower().endswith(IMG_EXTS):
-            out.append({"sourceKey": f, "path": os.path.join(wdir, f)})
+            path = os.path.join(wdir, f)
+            out.append({"sourceKey": f, "path": path, "purchase_price": sidecar_price(path)})
     return out
 
 
@@ -75,6 +79,53 @@ def list_fakes() -> list[dict]:
         if photos:
             out.append({"sourceFolder": os.path.basename(d), "path": d, "photos": photos})
     return out
+
+
+def sidecar_url(image_path: str) -> str | None:
+    """URL produit Shein enregistrée à côté d'une image scrapée (fichier .txt jumeau)."""
+    try:
+        txt = os.path.splitext(image_path)[0] + ".txt"
+        if os.path.exists(txt):
+            with open(txt, encoding="utf-8") as f:
+                return (f.read().strip() or None)
+    except Exception:
+        pass
+    return None
+
+
+def sidecar_price(image_path: str) -> float | None:
+    """Prix d'achat Shein (€) enregistré à côté d'une image scrapée (fichier .price jumeau).
+
+    Format du fichier : un nombre décimal (ex "12.99"). None si absent/illisible."""
+    try:
+        p = os.path.splitext(image_path)[0] + ".price"
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                raw = f.read().strip().replace(",", ".")
+            return float(raw) if raw else None
+    except Exception:
+        pass
+    return None
+
+
+def dhash_path(image_path: str, hash_size: int = 8) -> str | None:
+    """Empreinte perceptuelle (dHash) 64 bits en hex via Pillow. None si échec.
+
+    Deux images quasi identiques ont une faible distance de Hamming entre leurs
+    dHash (robuste au léger recadrage/recompression, contrairement à un hash de
+    fichier qui change au moindre octet)."""
+    try:
+        from PIL import Image
+        img = Image.open(image_path).convert("L").resize((hash_size + 1, hash_size), Image.LANCZOS)
+        px = list(img.getdata())
+        bits = 0
+        for row in range(hash_size):
+            base = row * (hash_size + 1)
+            for col in range(hash_size):
+                bits = (bits << 1) | (1 if px[base + col] > px[base + col + 1] else 0)
+        return f"{bits:016x}"
+    except Exception:
+        return None
 
 
 if __name__ == "__main__":

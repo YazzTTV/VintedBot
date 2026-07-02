@@ -18,7 +18,7 @@ import routine_pools
 BOT = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.join(BOT, "routine_state.json")
 
-_EMPTY = {"version": 1, "winners": {}, "fakes": {}, "salves": []}
+_EMPTY = {"version": 1, "winners": {}, "fakes": {}, "salves": [], "used_products": {}}
 
 
 def _now() -> str:
@@ -91,6 +91,65 @@ def drop_reserved(state: dict) -> None:
     seuls PUBLISHED et FAILED doivent persister)."""
     for k in [k for k, v in state["fakes"].items() if v.get("status") == "RESERVED"]:
         del state["fakes"][k]
+
+
+# ---- Déduplication produits scrapés (anti re-publication de la même robe) ----
+# winners = repérés par nom de fichier (horodaté) -> insuffisant : re-scraper la même
+# robe Shein produit un nouveau nom = vue comme neuve. On enregistre donc l'IDENTITÉ
+# produit (URL Shein + empreinte dHash) au moment de la publication, et le scraper
+# saute tout produit déjà publié.
+
+def _norm_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    return (url.split("?")[0].rstrip("/").lower() or None)
+
+
+def _hamming_hex(a: str, b: str) -> int:
+    try:
+        return bin(int(a, 16) ^ int(b, 16)).count("1")
+    except Exception:
+        return 64
+
+
+def product_is_used(state: dict, url: str | None = None, phash: str | None = None,
+                    max_dist: int = 2) -> bool:
+    """True si ce produit a déjà été publié : même URL Shein, OU image quasi identique
+    (distance dHash <= max_dist). Seuil volontairement SERRÉ : l'URL fait le gros du
+    tri ; le dHash (sur niveaux de gris) ne distingue pas bien les couleurs, donc un
+    seuil large écarterait à tort une autre couleur du même modèle. Fail-open si ni URL
+    ni phash."""
+    up = state.get("used_products", {})
+    nurl = _norm_url(url)
+    for v in up.values():
+        if nurl and v.get("url") and v["url"] == nurl:
+            return True
+        if phash and v.get("phash") and _hamming_hex(phash, v["phash"]) <= max_dist:
+            return True
+    return False
+
+
+def mark_product_used(state: dict, source_key: str, url: str | None = None,
+                      phash: str | None = None) -> None:
+    up = state.setdefault("used_products", {})
+    if source_key in up:
+        return
+    up[source_key] = {"url": _norm_url(url), "phash": phash, "at": _now()}
+
+
+def register_winner_product(state: dict, source_key: str, path: str | None = None) -> None:
+    """Enregistre l'identité produit (URL sidecar + dHash) d'un winner publié.
+    Idempotent. Cherche le fichier via le pool si `path` non fourni."""
+    if not source_key:
+        return
+    if not path:
+        for w in routine_pools.list_winners():
+            if w["sourceKey"] == source_key:
+                path = w["path"]
+                break
+    url = routine_pools.sidecar_url(path) if path else None
+    phash = routine_pools.dhash_path(path) if path else None
+    mark_product_used(state, source_key, url=url, phash=phash)
 
 
 # ---- Journal ----

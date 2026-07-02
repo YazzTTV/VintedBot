@@ -312,15 +312,29 @@ def analyze_screenshot(image_path: str, size: str = "S", language: str = "fr", n
 WINNER_PRICE_RANGE = (40, 80)   # vrais articles (robes/vêtements tendance)
 FAKE_PRICE_RANGE = (30, 70)     # fakes : volontairement assez élevés (pas destinés à se vendre)
 
+# --- Politique de marge (WINNERS) ---
+# Une offre automatique de -LIKER_OFFER_DISCOUNT€ est faite aux acheteurs qui likent.
+# On veut au minimum MARGIN_MIN_AFTER_OFFER€ de marge APRÈS cette offre, donc le prix
+# affiché doit couvrir : prix_achat + LIKER_OFFER_DISCOUNT + MARGIN_MIN_AFTER_OFFER.
+LIKER_OFFER_DISCOUNT = 10       # € retirés automatiquement aux prospects qui likent
+MARGIN_MIN_AFTER_OFFER = 10     # € de marge nette minimale visée APRÈS l'offre
+# => marge mini AVANT offre = 20€ (plancher = prix_achat + 20).
+MARGIN_MIN_BEFORE_OFFER = LIKER_OFFER_DISCOUNT + MARGIN_MIN_AFTER_OFFER
+
 
 def suggest_price(kind: str, title: str, description: str = "", language: str = "fr",
-                  sold_count: int = 0, price_range: tuple | None = None) -> int:
+                  sold_count: int = 0, price_range: tuple | None = None,
+                  purchase_price: float | None = None) -> int:
     """
     Demande à Gemini un prix de vente (entier €) adapté à l'article.
     - kind="WINNER" : prix optimal marge/vitesse dans la fourchette, monte avec sold_count.
     - kind="FAKE"   : prix volontairement élevé/crédible (l'objet n'a pas vocation à se vendre).
     sold_count : nb de ventes passées (0 tant que la couche ventes n'est pas branchée).
-    Robuste : clamp dans la fourchette, fallback = milieu de fourchette si l'appel échoue.
+    purchase_price : coût d'achat Shein (€). Si fourni (WINNER), impose un PLANCHER
+        = prix_achat + MARGIN_MIN_BEFORE_OFFER (20€), pour garantir >=10€ de marge même
+        après l'offre automatique -10€ faite aux likers. Pas de plafond : Gemini peut
+        viser haut si la demande (sold_count) le justifie.
+    Robuste : clamp dans la fourchette (plancher marge inclus), fallback = milieu si l'appel échoue.
     """
     import os
     import re as _re
@@ -328,6 +342,16 @@ def suggest_price(kind: str, title: str, description: str = "", language: str = 
     from dotenv import load_dotenv
 
     lo, hi = price_range or (WINNER_PRICE_RANGE if kind == "WINNER" else FAKE_PRICE_RANGE)
+
+    # Plancher marge (WINNER uniquement) : le prix affiché doit couvrir le coût + la marge,
+    # en tenant compte de l'offre auto -10€ aux likers.
+    floor = None
+    if kind == "WINNER" and purchase_price and purchase_price > 0:
+        floor = int(round(purchase_price)) + MARGIN_MIN_BEFORE_OFFER
+        lo = max(lo, floor)
+        if hi < lo:
+            hi = lo + 40  # achat élevé : on ouvre de la marge vers le haut plutôt que de coincer le prix
+
     fallback = round((lo + hi) / 2)
 
     load_dotenv()
@@ -336,12 +360,21 @@ def suggest_price(kind: str, title: str, description: str = "", language: str = 
         return fallback
 
     if kind == "WINNER":
+        cout_txt = ""
+        if floor is not None:
+            cout_txt = (
+                f" Coût d'achat de l'article : {purchase_price:.2f}€. Une offre automatique de "
+                f"-{LIKER_OFFER_DISCOUNT}€ est envoyée aux acheteurs qui likent l'article : le prix affiché "
+                f"doit donc rester rentable même après cette remise (le minimum {lo}€ garantit déjà "
+                f"une marge nette d'au moins {MARGIN_MIN_AFTER_OFFER}€ après offre)."
+            )
         instr = (
             f"Tu es expert en pricing de seconde main sur Vinted (mode femme tendance). "
             f"Article : \"{title}\". {description}\n"
             f"Propose le PRIX DE VENTE optimal en euros, ENTRE {lo} ET {hi}, qui maximise la marge "
             f"tout en se vendant vite. Cet article s'est déjà vendu {sold_count} fois : plus ce nombre "
             f"est élevé, plus la demande est forte, donc plus tu peux viser le haut de la fourchette."
+            + cout_txt
         )
     else:
         instr = (
@@ -358,8 +391,13 @@ def suggest_price(kind: str, title: str, description: str = "", language: str = 
         if not m:
             return fallback
         price = int(m.group(0))
-        price = max(lo, min(hi, price))  # clamp dans la fourchette
-        print(f"[Processor] Prix suggéré ({kind}, ventes={sold_count}) : {price}€")
+        price = max(lo, min(hi, price))  # clamp dans la fourchette (plancher marge inclus)
+        if floor is not None:
+            marge_apres_offre = price - LIKER_OFFER_DISCOUNT - purchase_price
+            print(f"[Processor] Prix suggéré ({kind}, ventes={sold_count}) : {price}€ "
+                  f"(achat {purchase_price:.2f}€, plancher {floor}€, marge après offre ~{marge_apres_offre:.0f}€)")
+        else:
+            print(f"[Processor] Prix suggéré ({kind}, ventes={sold_count}) : {price}€")
         return price
     except Exception as e:
         print(f"[Processor] [WARN] suggest_price échec ({e}) -> fallback {fallback}€")

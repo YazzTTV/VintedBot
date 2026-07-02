@@ -23,6 +23,7 @@ Usage :
   python salve.py --submit --lock            # pose le verrou manager pendant la publication (si déployé)
 """
 import os
+import re
 import sys
 import time
 import shutil
@@ -87,6 +88,29 @@ def manager_unlock(account: str) -> None:
 
 # ---------- Préparation du contenu ----------
 
+def _copy_photo_capped(src: str, dst: str, max_side: int = 1600, quality: int = 88,
+                       threshold: int = 1_500_000) -> None:
+    """Copie une photo de fake en la redimensionnant si elle est trop lourde.
+
+    Les photos brutes de smartphone (4+ Mo / 12 MP) tuent le driver Playwright à
+    l'upload CDP ('set_input_files: Connection closed while reading from the driver').
+    On plafonne le grand côté à max_side et on réencode en JPEG ; Vinted recompresse
+    de toute façon. Sous le seuil, copie à l'identique. Fallback copie brute si erreur.
+    """
+    try:
+        if os.path.getsize(src) <= threshold:
+            shutil.copy2(src, dst)
+            return
+        from PIL import Image, ImageOps
+        im = ImageOps.exif_transpose(Image.open(src)).convert("RGB")
+        im.thumbnail((max_side, max_side), Image.LANCZOS)
+        root, _ = os.path.splitext(dst)
+        im.save(root + ".jpg", "JPEG", quality=quality, optimize=True)
+    except Exception as e:
+        print(f"    [WARN] redimensionnement échoué ({os.path.basename(src)}: {e}) -> copie brute")
+        shutil.copy2(src, dst)
+
+
 async def prepare_winner(account: str, cfg, winner: dict, out_dir: str) -> bool:
     """Génère titre/desc + 3 images IA pour un winner (réutilise le pipeline existant)."""
     from processor import analyze_screenshot, suggest_price
@@ -114,9 +138,12 @@ async def prepare_winner(account: str, cfg, winner: dict, out_dir: str) -> bool:
         print(f"    [PRIX] override fixe winner '{titre[:40]}' : {price}€")
     elif isinstance(ov, list):
         price = suggest_price("WINNER", titre, desc, cfg.language,
-                              sold_count=winner.get("sold_count", 0), price_range=tuple(ov))
+                              sold_count=winner.get("sold_count", 0), price_range=tuple(ov),
+                              purchase_price=winner.get("purchase_price"))
     else:
-        price = suggest_price("WINNER", titre, desc, cfg.language, sold_count=winner.get("sold_count", 0))
+        price = suggest_price("WINNER", titre, desc, cfg.language,
+                              sold_count=winner.get("sold_count", 0),
+                              purchase_price=winner.get("purchase_price"))
     with open(os.path.join(out_dir, "price.txt"), "w", encoding="utf-8") as f:
         f.write(str(price))
 
@@ -155,7 +182,7 @@ def prepare_fake(account: str, cfg, fake: dict, out_dir: str) -> bool:
         f.write(str(price))
 
     for src in fake["photos"]:
-        shutil.copy2(src, os.path.join(out_dir, os.path.basename(src)))
+        _copy_photo_capped(src, os.path.join(out_dir, os.path.basename(src)))
     print(f"    fake {fake['sourceFolder']} '{data.get('titre_vinted')[:40]}' -> {len(fake['photos'])} photos")
     return True
 
@@ -177,7 +204,21 @@ def mark_tab(account: str):
     logged_out_urls = []  # onglets Vinted dont la session a expiré (HTTP 401)
     p = sync_playwright().start()
     try:
-        b = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}", timeout=60000)
+        # connect_over_cdp peut timeouter transitoirement quand Brave est momentanément
+        # surchargé (machine 6 Go + nombreux onglets) juste après la génération IA.
+        # -> retry court plutôt que crasher toute la salve.
+        b = None
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                b = p.chromium.connect_over_cdp(f"http://127.0.0.1:{PORT}", timeout=30000)
+                break
+            except Exception as e:
+                last_err = e
+                print(f"  [CDP] connect_over_cdp échec (essai {attempt}/3 : {type(e).__name__}). Retry dans 5s...")
+                time.sleep(5)
+        if b is None:
+            raise RuntimeError(f"connexion CDP impossible après 3 essais : {last_err}")
         ctx = b.contexts[0]
         for pg in ctx.pages:
             if "vinted.fr" not in pg.url.lower():
@@ -214,6 +255,46 @@ def mark_tab(account: str):
 def publish_one(account: str, product_dir: str, submit: bool) -> bool:
     from vinted_publisher import publish_listing
     return publish_listing(account, product_dir, auto_submit=submit, save_draft=not submit)
+
+
+def append_sourcing_history(cfg, titre: str, shein_url: str, fiche: str) -> None:
+    """Ajoute une ligne au registre Accounts/<compte>/Sourcing_History.md du compte.
+
+    Reproduit EXACTEMENT le format écrit par watcher.py (l'ancien pipeline) et lu par
+    vinted-manager/scripts/sync-sourcing.ts (tableau Markdown : col Article = **titre**,
+    col Lien = [texte](url), col Fiche = [[fiche]]). C'est ce qui alimente le sourcing
+    du Manager : sans cette ligne, l'annonce n'apparaît pas (salve.py ne l'écrivait plus).
+    """
+    history_path = cfg.history_path
+    header_needed = not os.path.exists(history_path)
+    with open(history_path, "a", encoding="utf-8") as h:
+        if header_needed:
+            h.write(f"# 📦 Historique du Sourcing & Commandes Vinted - Compte {cfg.name}\n\n")
+            h.write("Ce registre répertorie tous les articles traités par le bot. "
+                    "Coche la case correspondante lors d'une commande d'achat suite à une vente.\n\n")
+            h.write("| Statut | Date de Sourcing | Article | Lien d'achat Shein | Fiche d'annonce |\n")
+            h.write("| :---: | :---: | :---: | :--- | :--- |\n")
+        today = time.strftime("%Y-%m-%d")
+        h.write(f"| [ ] À commander | {today} | **{titre}** | "
+                f"[Lien de l'article Shein]({shein_url}) | [[{fiche}]] |\n")
+
+
+def record_winner_sourcing(cfg, product_dir: str, source_key: str, winner_path) -> str:
+    """Écrit la ligne Sourcing_History.md d'un winner publié (titre lu dans titre.txt +
+    URL Shein réelle via sidecar .txt, sinon URL synthétique UNIQUE + fiche). Renvoie le
+    titre utilisé. Réutilisé par salve.py (run normal) et republish_failed.py (re-publi)."""
+    fiche = os.path.splitext(source_key)[0]
+    titre_pub = ""
+    tp = os.path.join(product_dir, "titre.txt")
+    if os.path.exists(tp):
+        with open(tp, encoding="utf-8") as tf:
+            titre_pub = tf.read().strip()
+    shein_url = routine_pools.sidecar_url(winner_path) if winner_path else None
+    if not shein_url:
+        safe = re.sub(r"[^a-zA-Z0-9_-]+", "-", fiche).strip("-") or "item"
+        shein_url = f"https://fr.shein.com/winner/{safe}"
+    append_sourcing_history(cfg, titre_pub or fiche, shein_url, fiche)
+    return titre_pub or fiche
 
 
 # ---------- Orchestration ----------
@@ -316,6 +397,16 @@ def run_salve(accounts, n_winners, n_fakes, dry_run, generate_only, submit, use_
                 print(f"  [WARN] onglet {acc} ({USERNAME[acc]}) introuvable -> compte non ouvert ? Salve sautée.")
                 continue
             for j, (kind, item, d) in enumerate(prepared):
+                # Anti-cascade : une annonce qui échoue (ex. fake « poison » exigeant une taille)
+                # casse le marqueur d'onglet maître -> toutes les suivantes échouent
+                # ("onglet maitre introuvable"). On RÉARME le marqueur avant chaque annonce
+                # (sauf la 1re, déjà armée juste au-dessus). Repris de republish_failed.py.
+                if j > 0:
+                    status, _ = mark_tab(acc)
+                    if status != "OK":
+                        print(f"  [WARN] réarmement onglet {acc} échoué ({status}) avant l'annonce "
+                              f"{j+1} -> arrêt de ce compte (les suivantes restent en attente).")
+                        break
                 print(f"  [PUBLISH {j+1}/{len(prepared)}] {kind} {os.path.basename(d)}")
                 try:
                     ok = publish_one(acc, d, submit)
@@ -325,6 +416,15 @@ def run_salve(accounts, n_winners, n_fakes, dry_run, generate_only, submit, use_
                 if ok:
                     if kind == "WINNER":
                         routine_state.mark_winner_published(state, item["sourceKey"], acc)
+                        # Enregistre l'identité produit (URL+dHash) -> anti re-scrape de la même robe.
+                        routine_state.register_winner_product(state, item["sourceKey"], item.get("path"))
+                        # Enregistrement dans le sourcing du Manager (via Sourcing_History.md ->
+                        # sync-sourcing.ts). Sans ça, l'annonce n'apparaît pas dans le sourcing.
+                        try:
+                            titre_pub = record_winner_sourcing(cfg, d, item["sourceKey"], item.get("path"))
+                            print(f"    [SOURCING] winner enregistré ({acc}) : {titre_pub[:40]}")
+                        except Exception as e:
+                            print(f"    [SOURCING] [WARN] écriture Sourcing_History échouée : {e}")
                     else:
                         routine_state.mark_fake_assigned(state, item["sourceFolder"], acc, status="PUBLISHED")
                     routine_state.save_state(state)
@@ -332,6 +432,11 @@ def run_salve(accounts, n_winners, n_fakes, dry_run, generate_only, submit, use_
                     pause = random.uniform(15, 30)
                     print(f"    pause anti-bot {int(pause)}s...")
                     time.sleep(pause)
+        except Exception as e:
+            print(f"  [ERREUR] compte {acc} interrompu ({type(e).__name__}: {e}). "
+                  f"Fakes réservés libérés, passage au compte suivant.")
+            routine_state.drop_reserved(state)
+            continue
         finally:
             if locked:
                 manager_unlock(acc)
