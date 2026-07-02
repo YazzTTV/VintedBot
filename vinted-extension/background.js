@@ -257,6 +257,11 @@ async function vintedFetchInPage(tabId, endpoint, options = {}) {
     }
 }
 
+// Augmentation de prix (€) appliquée au repost d'un article VENDU : il s'est vendu,
+// donc on retente au prix supérieur (test d'élasticité). Ne s'applique PAS aux invendus
+// (masqués / >7 jours) qu'on repost tels quels. Voir options.priceBump dans repostItemInPage.
+const REPOST_PRICE_BUMP = 5;
+
 /**
  * 🔄 REPOSTE FURTIF (version page MAIN world).
  * CRITIQUE : Vinted rejette l'upload de photos (/api/v2/photos) si la requête vient du service worker
@@ -505,6 +510,12 @@ async function repostItemInPage(tabId, itemId, options = {}) {
                         : parseFloat(original.price);
                 }
                 let finalPrice = options.newPrice != null ? parseFloat(options.newPrice) : basePrice;
+                // Bump prix pour un article VENDU : +priceBump€ sur le prix précédent (repost d'un vendu).
+                // Ignoré si un prix explicite (newPrice) est imposé par l'appelant/UI.
+                if (options.newPrice == null && options.priceBump && basePrice >= 1) {
+                    finalPrice = basePrice + parseFloat(options.priceBump);
+                    log(`💰 [REPOST] Article vendu → prix +${options.priceBump}€ : ${basePrice}€ → ${finalPrice}€`);
+                }
                 if (!finalPrice || isNaN(finalPrice) || finalPrice < 1) {
                     return { success: false, error: `Prix invalide (${finalPrice}). Prix original brut: ${JSON.stringify(original.price)} / price_numeric: ${original.price_numeric}` };
                 }
@@ -1541,8 +1552,10 @@ async function autoRestockRoutine() {
                     const itemToRestock = itemsToRestock[i];
                     terminalLog(`🎯 [RESTOCK] Reposte de l'article ${i+1}/${itemsToRestock.length}: "${itemToRestock.title}" (ID: ${itemToRestock.id})...`);
                     try {
-                        const repostResult = await repostItemInPage(optimalTab.id, itemToRestock.id, { deleteAfter: true, fallbackItem: itemToRestock });
-                        terminalLog(`✅ [RESTOCK] Reposte réussi : Nouveau ID -> ${repostResult.newId}`);
+                        // +REPOST_PRICE_BUMP€ seulement pour les VENDUS (priorité 1), pas pour les invendus (masqués/anciens).
+                        const priceBump = itemToRestock._restockPriority === 1 ? REPOST_PRICE_BUMP : 0;
+                        const repostResult = await repostItemInPage(optimalTab.id, itemToRestock.id, { deleteAfter: true, fallbackItem: itemToRestock, priceBump });
+                        terminalLog(`✅ [RESTOCK] Reposte réussi : Nouveau ID -> ${repostResult.newId}${priceBump ? ` (prix +${priceBump}€)` : ""}`);
                         
                         // Sauvegarder l'ID original pour ne plus jamais le traiter
                         restockedItemIds.push(itemToRestock.id);
