@@ -104,6 +104,26 @@ document.addEventListener('DOMContentLoaded', () => {
                     restockTimer.className = 'timer-badge';
                 }
             }
+
+            // 6. Shein Tracking Sync
+            const sheinAlarm = alarms.find(a => a.name === 'sheinTrackingAlarm');
+            const sheinTimer = document.getElementById('shein-tracking-timer');
+            if (sheinTimer) {
+                if (sheinAlarm) {
+                    const diff = Math.max(0, sheinAlarm.scheduledTime - now);
+                    const totalMins = Math.floor(diff / 60000);
+                    const mins = totalMins % 60;
+                    const hours = Math.floor(totalMins / 60);
+                    const secs = Math.floor((diff % 60000) / 1000);
+                    
+                    let timeStr = hours > 0 ? `${hours}h ${mins}m ${secs.toString().padStart(2, '0')}s` : `${mins}m ${secs.toString().padStart(2, '0')}s`;
+                    sheinTimer.innerHTML = `<span>📦</span> Suivis Shein : <b>${timeStr}</b>`;
+                    sheinTimer.className = 'timer-badge active-timer';
+                } else {
+                    sheinTimer.innerHTML = `<span>📦</span> Suivis Shein : planification...`;
+                    sheinTimer.className = 'timer-badge';
+                }
+            }
         });
     }
     
@@ -263,6 +283,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     checkGeminiBtn.innerHTML = originalText;
                     checkGeminiBtn.className = "btn btn-secondary";
                 }, 4000);
+            });
+        });
+    }
+
+    const sheinTrackingBtn = document.getElementById('sync-shein-tracking-btn');
+    if (sheinTrackingBtn) {
+        sheinTrackingBtn.addEventListener('click', () => {
+            const originalHTML = sheinTrackingBtn.innerHTML;
+            sheinTrackingBtn.innerHTML = '<span>⏳</span> Extraction...';
+            sheinTrackingBtn.disabled = true;
+            
+            chrome.runtime.sendMessage({ action: "FORCE_SHEIN_TRACKING" }, (response) => {
+                setTimeout(() => {
+                    sheinTrackingBtn.innerHTML = originalHTML;
+                    sheinTrackingBtn.disabled = false;
+                }, 1000);
             });
         });
     }

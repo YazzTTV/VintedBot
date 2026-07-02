@@ -585,6 +585,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(err => sendResponse({ success: false, error: err.message }));
         return true;
     }
+
+    // ACTION UI : Forcer l'extraction des suivis Shein
+    if (request.action === "FORCE_SHEIN_TRACKING") {
+        extractSheinTracking()
+            .then(() => sendResponse({ success: true }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
     // PONT REST API : Lancer un reposte furtif d'un article (via contexte page same-origin)
     if (request.action === "repostItemREST") {
         (async () => {
@@ -1159,124 +1167,89 @@ async function handleSheinCart(url, taille, venteId) {
                     world: "MAIN", // CRITIQUE : S'exécuter dans le contexte principal pour que Vue/React accepte les clics !
                     func: async (targetTaille) => {
                         try {
-                            const closeBtns = document.querySelectorAll('.c-coupon-box .she-close, .cookie-banner .close-btn');
+                            const closeBtns = document.querySelectorAll('.c-coupon-box .she-close, .cookie-banner .close-btn, .geetest_close');
                             closeBtns.forEach(btn => btn.click());
 
-                            // 🛡️ Détection captcha SHEIN ("je suis humain" / GeeTest) : si la page est un
-                            // contrôle anti-bot, le produit n'est pas chargé. On STOPPE immédiatement sans
-                            // cliquer ni extraire de prix (sinon on remonterait un faux bouton + un prix bidon).
-                            const __pageText = (document.body?.innerText || "").toLowerCase();
-                            const __captchaMarkers = ["je suis humain", "i'm a human", "i am human", "verify you are human", "press & hold", "appuyez et maintenez", "vérifiez que vous", "verifiez que vous", "captcha"];
-                            const __hasCaptchaEl = !!document.querySelector('.geetest_box, .geetest_holder, [class*="geetest"], #captcha, [id*="captcha"], iframe[src*="captcha"]');
-                            if (__hasCaptchaEl || __captchaMarkers.some(m => __pageText.includes(m))) {
-                                return { success: false, state: "CAPTCHA", price: null };
-                            }
-
-                            let sizeClicked = false;
-
-                            if (targetTaille) {
-                                if (window.__botSizeClicked) {
-                                    sizeClicked = true;
-                                } else {
-                                    const tgt = targetTaille.toUpperCase();
-                                    
-                                    // Ciblage exact calqué sur les clics manuels de l'utilisateur
-                                    const allSizeElements = Array.from(document.querySelectorAll('p.product-intro__size-radio-inner, span.size-radio__inner-one, div.product-intro__size-radio'));
-                                    let matchingSize = allSizeElements.find(el => {
-                                        if (el.children.length > 2) return false; 
-                                        const text = el.textContent?.trim().toUpperCase() || "";
-                                        if (text.length === 0 || text.length > 15) return false; 
-                                        return text === tgt || text === `(${tgt})` || text.includes(`(${tgt})`) || new RegExp(`\\b${tgt}\\b`).test(text);
-                                    });
-
-                                    if (matchingSize) {
-                                        // Clic simplissime direct sur le noeud texte, exactement comme la souris de l'utilisateur
-                                        matchingSize.click();
-                                        
-                                        // Si le parent est un div radio, on le clique aussi par sécurité
-                                        const parentRadio = matchingSize.closest('div.product-intro__size-radio');
-                                        if (parentRadio && parentRadio !== matchingSize) {
-                                            parentRadio.click();
-                                        }
-
-                                        window.__botSizeClicked = true;
-                                        return { success: false, state: "SIZE_CLICKED_WAITING_STATE", sizeHTML: matchingSize.outerHTML };
-                                    } else {
-                                        return { success: false, state: "WAITING_FOR_SIZE_TO_RENDER" };
-                                    }
-                                }
-                            } else {
-                                sizeClicked = true;
-                            }
-
-                            // Ciblage calqué sur le clic manuel: la balise DIV contenant le texte dans le bouton
-                            let addBtn = document.querySelector('#ProductDetailAddBtn div.productAddBtn__text, button#ProductDetailAddBtn');
-                            
-                            if (!addBtn) {
-                                addBtn = Array.from(document.querySelectorAll('button.add-cart-btn, div[role="button"]'))
-                                    .find(b => {
-                                        const t = b.textContent?.toUpperCase() || "";
-                                        if (t.includes('PROFIL') || t.includes('CONNEXION')) return false;
-                                        return t.includes('AJOUTER') || t.includes('ADD TO CART');
-                                    });
-                            }
-                            
-                            // --- Extraction du prix d'achat ---
+                            // --- Extraction du Prix ---
                             let extractedPrice = null;
                             try {
-                                // Stratégie 1: Balise Meta cachée (très fiable)
                                 const metaPrice = document.querySelector('meta[property="og:price:amount"]');
                                 if (metaPrice && metaPrice.content) {
                                     extractedPrice = parseFloat(metaPrice.content);
                                 }
-                                
-                                // Stratégie 2: Sélecteurs visuels
-                                if (!extractedPrice || isNaN(extractedPrice)) {
-                                    const priceSelectors = ['.product-intro__head-mainprice .discount', '.product-intro__head-mainprice', '.original-price', '.price', 'h2.product-intro__head-price span'];
-                                    let priceText = "";
-                                    for(let sel of priceSelectors) {
-                                        const el = document.querySelector(sel);
-                                        if(el && (el.textContent.includes('€') || el.textContent.includes('EUR'))) {
-                                            priceText = el.textContent;
-                                            break;
-                                        }
-                                    }
-                                    if (priceText) {
-                                        const match = priceText.match(/[\d,.]+/);
-                                        if (match) {
-                                            extractedPrice = parseFloat(match[0].replace(',', '.'));
-                                        }
-                                    }
-                                }
-                                
-                                // Stratégie 3: Recherche brute dans tout le HTML (Regex)
                                 if (!extractedPrice || isNaN(extractedPrice)) {
                                     const bodyText = document.body.innerText;
                                     const matchEuro = bodyText.match(/(?:Dès\s*)?(\d+[,.]\d{2})\s*€/);
-                                    if (matchEuro) {
-                                        extractedPrice = parseFloat(matchEuro[1].replace(',', '.'));
-                                    }
+                                    if (matchEuro) extractedPrice = parseFloat(matchEuro[1].replace(',', '.'));
                                 }
-                            } catch (e) {
-                                console.error("Erreur extraction prix:", e);
+                            } catch (e) {}
+
+                            // --- Extraction du goods_id ---
+                            let goods_id = "";
+                            try {
+                                if (window.SaPageInfo && window.SaPageInfo.page_param && window.SaPageInfo.page_param.goods_id) {
+                                    goods_id = window.SaPageInfo.page_param.goods_id;
+                                } else {
+                                    const urlMatch = location.href.match(/-p-(\d+)\.html/);
+                                    if (urlMatch) goods_id = urlMatch[1];
+                                }
+                            } catch(e) {}
+                            if (!goods_id) {
+                                // Si pas de goods_id, la page n'est peut-être pas chargée
+                                return { success: false, state: "WAITING", error: "goods_id introuvable" };
                             }
 
-                            if (addBtn) {
-                                window.__botSizeClicked = false;
-                                
-                                // FIX: Attendre 2 secondes avant de cliquer sur 'Ajouter au panier'
-                                // Cela laisse le temps à Shein de charger les variantes de tailles !
-                                await new Promise(r => setTimeout(r, 2000));
-                                
-                                // Clic simplissime direct
-                                addBtn.click();
-                                
-                                return { success: true, sizeFound: sizeClicked, state: "CLICKED", price: extractedPrice };
+                            // --- Extraction du sku_code (pour la taille exacte) ---
+                            let skus = [];
+                            document.querySelectorAll('script[type="application/ld+json"]').forEach(script => {
+                                try {
+                                    let data = JSON.parse(script.innerText);
+                                    let processProduct = (d) => {
+                                         if(d['@type'] === 'ProductGroup' && d.hasVariant) {
+                                            d.hasVariant.forEach(v => { skus.push({ size: v.size || v.name, sku: v.sku }); });
+                                         } else if(d['@type'] === 'Product' && d.sku) {
+                                            skus.push({ size: d.size || d.name, sku: d.sku });
+                                         }
+                                    };
+                                    if(Array.isArray(data)) data.forEach(processProduct);
+                                    else processProduct(data);
+                                } catch(e) {}
+                            });
+
+                            let targetSkuCode = "";
+                            if (targetTaille) {
+                                const tgt = targetTaille.toUpperCase();
+                                let matchingSku = skus.find(s => s.size && typeof s.size === 'string' && s.size.toUpperCase() === tgt);
+                                if (!matchingSku) {
+                                    matchingSku = skus.find(s => s.size && typeof s.size === 'string' && (s.size.toUpperCase().includes(`(${tgt})`) || new RegExp(`\\b${tgt}\\b`).test(s.size.toUpperCase())));
+                                }
+                                if (matchingSku) targetSkuCode = matchingSku.sku;
+                            } else {
+                                if (skus.length > 0) targetSkuCode = skus[0].sku;
                             }
                             
-                            // Pas de bouton "Ajouter" trouvé → page produit pas (encore) chargée :
-                            // on NE renvoie PAS de prix (éviter un prix bidon issu d'une page intermédiaire).
-                            return { success: false, state: "WAITING", sizeFound: sizeClicked, price: null };
+                            if (!targetSkuCode) {
+                                // Parfois l'application/ld+json met du temps à apparaître
+                                return { success: false, state: "WAITING", error: "aucun sku_code trouvé pour cette taille" };
+                            }
+
+                            // --- API Bypass: On envoie la requête d'ajout directement ! ---
+                            // Zéro clic sur "Ajouter au panier", donc le Geetest ne bloque pas l'action réseau (ou très rarement).
+                            const res = await fetch("/bff-api/order/add_to_cart?_ver=1.1.8&_lang=fr", {
+                                method: "POST",
+                                headers: {
+                                    "Content-Type": "application/x-www-form-urlencoded"
+                                },
+                                body: `goods_id=${goods_id}&quantity=1&mall_code=1&skuMallCode=1&isAppointMall=&sceneFlag=&promotion_id=0&promotion_type=0&sku_code=${targetSkuCode}`
+                            });
+                            
+                            const data = await res.json();
+                            if (data && data.code === "0") {
+                                return { success: true, state: "API_ADDED", price: extractedPrice };
+                            } else {
+                                // Si erreur (ex: rupture de stock), on remonte l'erreur
+                                return { success: false, state: "API_FAILED", error: data.msg || JSON.stringify(data) };
+                            }
                         } catch (err) {
                             return { success: false, error: err.message };
                         }
@@ -1400,6 +1373,7 @@ const POLL_ALARM_B = "vintedPollAlarmB";
 const WARMUP_ALARM_NAME = "vintedWarmupAlarm";
 const METRICS_ALARM_NAME = "vintedSyncAlarm";
 const RESTOCK_ALARM_NAME = "vintedRestockAlarm";
+const SHEIN_TRACKING_ALARM = "sheinTrackingAlarm";
 
 // Initialisation intelligente des alarmes (anti-reset au réveil du SW)
 chrome.alarms.getAll((alarms) => {
@@ -1421,6 +1395,10 @@ chrome.alarms.getAll((alarms) => {
     if (!alarms.find(a => a.name === RESTOCK_ALARM_NAME)) {
         // Alarme Restock J+7: s'exécute toutes les 4 heures (240 min)
         chrome.alarms.create(RESTOCK_ALARM_NAME, { delayInMinutes: 5, periodInMinutes: 240 });
+    }
+    if (!alarms.find(a => a.name === SHEIN_TRACKING_ALARM)) {
+        // Alarme de suivi Shein : s'exécute toutes les 60 minutes
+        chrome.alarms.create(SHEIN_TRACKING_ALARM, { delayInMinutes: 1, periodInMinutes: 60 });
     }
 });
 
@@ -1463,6 +1441,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === RESTOCK_ALARM_NAME) {
         console.log("⏰ [ALARM] Lancement de l'Auto-Restock (J+7)...");
         autoRestockRoutine().catch(err => console.error("❌ Erreur Auto-Restock :", err));
+    }
+    
+    if (alarm.name === SHEIN_TRACKING_ALARM) {
+        console.log("⏰ [ALARM] Lancement extraction suivis Shein...");
+        extractSheinTracking().catch(err => console.error("❌ Erreur Suivi Shein :", err));
     }
 });
 
@@ -3282,9 +3265,9 @@ async function pollActionQueueFromManager() {
                     } else if (action.actionType === "ADD_TO_CART_SHEIN") {
                         terminalLog("🛒 Initialisation de l'ajout au panier automatique...");
                         const cartResult = await handleSheinCart(action.payload.url, action.payload.taille, action.payload.venteId);
-                        console.log(`✅ [SHEIN CART] Ajout réussi.`);
+                        console.log(`✅ [SHEIN CART] Ajout terminé. Succès: ${cartResult?.success}`);
                         
-                        if (cartResult && action.payload.venteId) {
+                        if (cartResult && cartResult.success === true && action.payload.venteId) {
                             try {
                                 const managerUrlObj = new URL(activeBaseUrl);
                                 const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
@@ -4588,3 +4571,97 @@ async function runMarketSpyLike(payload) {
 }
 
 
+// === SYNCHRONISATION DES SUIVIS SHEIN ===
+async function extractSheinTracking() {
+    terminalLog("📦 [SHEIN] Lancement de l'extraction des numéros de suivi...");
+    const url = "https://fr.shein.com/user/orders/list";
+    
+    let newTab;
+    try {
+        // 1. Ouvrir l'onglet en arrière-plan
+        newTab = await new Promise((resolve) => {
+            chrome.tabs.create({ url, active: false }, (tab) => resolve(tab));
+        });
+
+        // 2. Attendre le chargement (Shein est lourd, laissons-lui 8 secondes)
+        await new Promise(r => setTimeout(r, 8000));
+
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: newTab.id },
+            world: "MAIN",
+            func: async () => {
+                try {
+                    let orderList = window.gbRawData?.order_list || [];
+                    // On filtre uniquement les commandes expédiées
+                    let shippedOrders = orderList.filter(o => {
+                        const status = o.orderStatusTitle?.toUpperCase() || "";
+                        return status === 'EXPÉDIÉ' || status === 'EXPÉDIÉS' || status === 'LIVRÉ';
+                    });
+                    
+                    let extractedData = [];
+                    
+                    for (let order of shippedOrders) {
+                        let title = order.orderGoodsList && order.orderGoodsList[0] ? order.orderGoodsList[0].goods_name : "Article Inconnu";
+                        let price = order.totalPrice ? parseFloat(order.totalPrice.replace(',', '.')) : null;
+                        let billno = order.billno;
+                        let orderUrl = order.orderGoodsList && order.orderGoodsList[0] ? order.orderGoodsList[0].goods_url : null;
+                        
+                        try {
+                            // Appel fantôme de l'API de suivi pour récupérer le vrai numéro
+                            let res = await fetch("/orders/track?billno=" + billno);
+                            let text = await res.text();
+                            
+                            // On extrait la variable shipping_no ou tracking_number
+                            let match = text.match(/"shipping_no"\s*:\s*"([^"]+)"/i) || text.match(/"tracking_number"\s*:\s*"([^"]+)"/i);
+                            if (match && match[1]) {
+                                extractedData.push({
+                                    title: title,
+                                    trackingNumber: match[1],
+                                    price: price,
+                                    productUrl: orderUrl ? "https://fr.shein.com" + orderUrl : null
+                                });
+                            }
+                        } catch(e) {}
+                    }
+                    return { success: true, data: extractedData };
+                } catch(err) {
+                    return { success: false, error: err.message };
+                }
+            }
+        });
+        
+        // Fermer l'onglet
+        chrome.tabs.remove(newTab.id).catch(()=>{});
+
+        const res = results[0]?.result;
+        if (res && res.success && res.data.length > 0) {
+            terminalLog(`📦 [SHEIN] ${res.data.length} numéros de suivi Colissimo/Privé trouvés.`);
+            
+            // Envoi au Manager
+            const managerUrlObj = new URL(activeBaseUrl);
+            const managerRootUrl = `${managerUrlObj.protocol}//${managerUrlObj.host}`;
+            
+            const apiRes = await fetch(`${managerRootUrl}/api/tracking/sync`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ orders: res.data })
+            });
+            
+            const apiData = await apiRes.json();
+            if (apiData.success) {
+                terminalLog(`✅ [SHEIN] Synchro réussie: ${apiData.linkedCount} commandes liées.`);
+            } else {
+                terminalLog(`⚠️ [SHEIN] Erreur synchro: ${apiData.error}`);
+            }
+        } else if (res && res.success) {
+            terminalLog("📦 [SHEIN] Aucun numéro de suivi exploitable trouvé.");
+        } else {
+            terminalLog("❌ [SHEIN] Erreur d'injection: " + (res?.error || "inconnue"));
+        }
+    } catch(err) {
+        terminalLog("❌ [SHEIN] Erreur globale: " + err.message);
+        if (newTab && newTab.id) {
+            chrome.tabs.remove(newTab.id).catch(()=>{});
+        }
+    }
+}

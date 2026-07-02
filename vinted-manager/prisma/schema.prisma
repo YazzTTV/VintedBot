@@ -113,6 +113,9 @@ model BotAccount {
   balanceAvailable Decimal?             @default(0) @db.Decimal(10, 2)
   lastSync         DateTime?
   accountType      AccountType          @default(TEST)
+  vintedEmail      String?
+  vintedPhone      String?
+  vintedPassword   String?
   createdAt        DateTime             @default(now())
   updatedAt        DateTime             @updatedAt
   actions          BotActionQueue[]

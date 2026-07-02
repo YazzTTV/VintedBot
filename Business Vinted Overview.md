@@ -43,8 +43,11 @@ Générer un maximum de cash flow rapidement.
 
 
 
+- [[[C] 2026-06-26]]
+
 ## 🔗 Liens
 - [[Index Ressources]]
+- [[SOP_Creation_Compte_Vinted.md]]
 
 ## 🏷️ Tags
 #project #business

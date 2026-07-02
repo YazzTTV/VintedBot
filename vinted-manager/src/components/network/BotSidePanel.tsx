@@ -1,5 +1,7 @@
-import React from 'react';
-import { X, Bot, Clock, Wallet, ShoppingBag, Activity, RefreshCw, MessageSquare, TrendingUp } from 'lucide-react';
+"use client";
+
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Bot, Clock, Wallet, ShoppingBag, Activity, RefreshCw, MessageSquare, TrendingUp, Save, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 
@@ -99,6 +101,16 @@ export default function BotSidePanel({ bot, onClose }: BotSidePanelProps) {
           </div>
         </div>
 
+        {/* Informations Vinted */}
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-3 flex items-center gap-2">
+            <Bot className="w-3.5 h-3.5 text-orange-400" /> Informations Vinted
+          </h3>
+          <div className="bg-zinc-900/60 border border-zinc-800/50 rounded-xl p-4 flex flex-col gap-3">
+            <VintedInfoForm bot={bot} />
+          </div>
+        </div>
+
         {/* Live Feed (Logs) */}
         <div>
           <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-500 mb-3 flex items-center gap-2">
@@ -141,3 +153,106 @@ export default function BotSidePanel({ bot, onClose }: BotSidePanelProps) {
     </div>
   );
 }
+
+function VintedInfoForm({ bot }: { bot: any }) {
+  const [email, setEmail] = useState(bot.vintedEmail || '');
+  const [phone, setPhone] = useState(bot.vintedPhone || '');
+  const [password, setPassword] = useState(bot.vintedPassword || '');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasChanges, setHasChanges] = useState(false);
+
+  useEffect(() => {
+    setEmail(bot.vintedEmail || '');
+    setPhone(bot.vintedPhone || '');
+    setPassword(bot.vintedPassword || '');
+    setHasChanges(false);
+  }, [bot]);
+
+  const handleChange = (setter: any) => (e: any) => {
+    setter(e.target.value);
+    setHasChanges(true);
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const res = await fetch(`/api/bots/${bot.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vintedEmail: email,
+          vintedPhone: phone,
+          vintedPassword: password
+        })
+      });
+      if (res.ok) {
+        bot.vintedEmail = email;
+        bot.vintedPhone = phone;
+        bot.vintedPassword = password;
+        setHasChanges(false);
+      }
+    } catch (err) {
+      console.error("Failed to save credentials", err);
+    }
+    setIsSaving(false);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <label className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Email</label>
+        <input 
+          type="email" 
+          value={email}
+          onChange={handleChange(setEmail)}
+          className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 transition-colors" 
+          placeholder="email@example.com"
+        />
+      </div>
+      
+      <div className="space-y-1">
+        <label className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Téléphone</label>
+        <input 
+          type="text" 
+          value={phone}
+          onChange={handleChange(setPhone)}
+          className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 transition-colors" 
+          placeholder="+33 6 12 34 56 78"
+        />
+      </div>
+
+      <div className="space-y-1">
+        <label className="text-[10px] font-bold uppercase text-zinc-500 tracking-wider">Mot de passe</label>
+        <div className="relative">
+          <input 
+            type={showPassword ? "text" : "password"} 
+            value={password}
+            onChange={handleChange(setPassword)}
+            className="w-full bg-zinc-950/50 border border-zinc-800 rounded-lg pl-3 pr-10 py-2 text-sm text-zinc-300 focus:outline-none focus:border-zinc-600 transition-colors" 
+            placeholder="••••••••"
+          />
+          <button 
+            type="button"
+            onClick={() => setShowPassword(!showPassword)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+          </button>
+        </div>
+      </div>
+
+      {hasChanges && (
+        <button 
+          onClick={handleSave}
+          disabled={isSaving}
+          className="w-full mt-2 flex items-center justify-center gap-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/20 rounded-lg px-3 py-2 text-sm font-semibold transition-colors disabled:opacity-50"
+        >
+          {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+          Sauvegarder
+        </button>
+      )}
+    </div>
+  );
+}
+
